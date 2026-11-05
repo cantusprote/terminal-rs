@@ -281,6 +281,8 @@ impl PaneKind {
                 chart_type: c.chart_type,
                 log: c.log,
                 indicators: c.indicators.clone(),
+                oscillator_share: c.oscillator_share,
+                oscillator_weights: c.oscillator_weights.clone(),
                 drawings: c.drawings.clone(),
                 compare: c.compare.clone(),
                 show_volume: c.show_volume,
@@ -325,6 +327,8 @@ impl PaneKind {
                 chart_type,
                 log,
                 indicators,
+                oscillator_share,
+                oscillator_weights,
                 drawings,
                 compare,
                 show_volume,
@@ -335,6 +339,8 @@ impl PaneKind {
                 c.chart_type = chart_type;
                 c.log = log;
                 c.indicators = indicators;
+                c.oscillator_share = oscillator_share;
+                c.oscillator_weights = oscillator_weights;
                 c.drawings = drawings;
                 c.compare = compare;
                 c.show_volume = show_volume;
@@ -1905,6 +1911,24 @@ mod tests {
             PaneSettings::Wei,
         ] {
             assert_eq!(PaneKind::from_settings(s.clone()).settings(), s);
+        }
+    }
+
+    #[test]
+    fn chart_independent_oscillator_heights_survive_saved_layout_round_trip() {
+        let mut chart = crate::chart_view::ChartState::new(11, "005930.KS", tr_core::Timeframe::D1);
+        chart.oscillator_share = Some(0.37);
+        chart.oscillator_weights = vec![0.7, 2.0, 0.5, 1.2];
+        let original = PaneKind::Chart(Box::new(chart)).settings();
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: PaneSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored);
+        if let PaneKind::Chart(chart) = PaneKind::from_settings(restored) {
+            assert_eq!(chart.oscillator_share, Some(0.37));
+            assert_eq!(chart.oscillator_weights, [0.7, 2.0, 0.5, 1.2]);
+            assert_eq!(chart.indicators.len(), 7);
+        } else {
+            panic!("saved indicator heights did not restore to a chart");
         }
     }
 }

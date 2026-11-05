@@ -63,6 +63,10 @@ pub enum PaneSettings {
         chart_type: ChartType,
         log: bool,
         indicators: Vec<IndicatorSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oscillator_share: Option<f32>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        oscillator_weights: Vec<f32>,
         drawings: Vec<Drawing>,
         compare: Option<String>,
         #[serde(default = "yes")]
@@ -269,6 +273,8 @@ pub fn chart_settings(symbol: &str, d: &crate::prefs::PanelDefaults) -> PaneSett
         chart_type: d.chart_type,
         log: false,
         indicators: crate::command::default_indicators(),
+        oscillator_share: None,
+        oscillator_weights: Vec::new(),
         drawings: Vec::new(),
         compare: None,
         show_volume: d.show_volume,
@@ -502,8 +508,18 @@ mod tests {
             {"id":2,"Feed":null}]}"#;
         let doc = LayoutDoc::from_json(raw.as_bytes()).unwrap();
         match &doc.panes[0].settings {
-            PaneSettings::Chart { show_volume, show_congress, magnet, log, .. } => {
-                assert!(*show_volume && *show_congress && !*magnet && *log)
+            PaneSettings::Chart {
+                show_volume,
+                show_congress,
+                magnet,
+                log,
+                oscillator_share,
+                oscillator_weights,
+                ..
+            } => {
+                assert!(*show_volume && *show_congress && !*magnet && *log);
+                assert_eq!(*oscillator_share, None, "old layouts use default indicator heights");
+                assert!(oscillator_weights.is_empty());
             }
             other => panic!("{other:?}"),
         }

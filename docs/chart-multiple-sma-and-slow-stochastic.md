@@ -3,6 +3,32 @@
 Terminal-rs keeps the existing chart layout and GPU drawing pipeline, but
 supports multiple independent period settings on one chart.
 
+## Drag to resize indicator panels
+
+The price chart and each oscillator (Stochastic, ADX, RSI, MACD and others)
+are separated by a thin horizontal resize line with a central grip.
+
+- **Drag the first divider** (between the price chart and the first
+  oscillator) **down** to shrink all indicator panels together and give
+  the price chart more room. Drag **up** to expand the entire indicator
+  stack while preserving each panel's relative size.
+- **Drag a divider between two oscillators** to change only the heights
+  of those neighboring panels. Their combined height stays the same.
+- **Double-click any indicator divider** to reset all indicator heights
+  on that chart to the default proportions.
+
+The cursor changes to vertical resize when hovering over a divider.
+New charts default to roughly **12% of the plot height per oscillator**
+(up to 60% in total), leaving more room for price candles than before.
+Drag limits keep both the main price chart and individual oscillators
+visible even in compact windows.
+
+Custom heights are stored in the active chart's saved layout and restored
+after restarting the app. Resizing the application window preserves the
+relative height distribution. Existing layouts without the new fields
+load with the updated defaults. Chart panning, scrolling, indicator
+calculations, and the independent SMA/Stochastic parameters are untouched.
+
 ## Moving averages
 
 Right-click a chart → **Indicators** → **Multiple SMA lines…** (or

@@ -35,6 +35,28 @@ const DEFAULT_VISIBLE: usize = 160;
 /// chart has room for at most seven.
 const MAX_SUB_PANES: usize = 6;
 
+/// Compute chart regions from a resizable total oscillator share and
+/// independent pane weights. Values are relative to the current chart height,
+/// so resizing the window preserves proportions instead of fixed pixels.
+fn oscillator_heights(height: f32, count: usize, share: Option<f32>, weights: &[f32]) -> (f32, Vec<f32>, f32) {
+    if count == 0 {
+        return (height, Vec::new(), 0.0);
+    }
+    let count_f = count as f32;
+    // Short windows still need a viable price chart and draggable study
+    // panes. In a normal window, each oscillator stays at least 36 px tall.
+    let min_pane = 36.0_f32.min(height * 0.65 / count_f);
+    let min_price = (height * 0.25).max(90.0).min(height - count_f * min_pane);
+    let default_total = height * (0.12 * count_f).min(0.6);
+    let total = share.map_or(default_total, |v| v * height).clamp(min_pane * count_f, height - min_price);
+    let usable = (total - min_pane * count_f).max(0.0);
+    let valid_weights = weights.len() == count && weights.iter().all(|w| w.is_finite() && *w > 0.0);
+    let sum = if valid_weights { weights.iter().sum::<f32>() } else { count_f };
+    let panels =
+        (0..count).map(|i| min_pane + usable * if valid_weights { weights[i] / sum } else { 1.0 / count_f }).collect();
+    (height - total, panels, min_pane)
+}
+
 /// Combine multiple Slow Stochastic %D instances onto one shared 0–100
 /// oscillator scale; all other oscillator studies keep separate panes.
 fn oscillator_groups(built: &[BuiltIndicator]) -> Vec<Vec<usize>> {
@@ -98,6 +120,12 @@ pub struct ChartState {
     pub show_volume: bool,
     pub show_congress: bool,
     pub indicators: Vec<IndicatorSpec>,
+    /// Share of chart plot reserved for oscillators, set by dragging the
+    /// price/indicator divider. None uses the default 12% per visible pane.
+    pub oscillator_share: Option<f32>,
+    /// Independent oscillator pane proportions (top to bottom); changing the
+    /// number of visible panes resets to equal weights until dragged again.
+    pub oscillator_weights: Vec<f32>,
     /// Unsaved inputs for the context-menu's custom study controls. The
     /// actual instances above are serialized with each chart's layout.
     custom_sma_length: usize,
@@ -162,6 +190,8 @@ impl ChartState {
             show_volume: true,
             show_congress: true,
             indicators: if is_korean { Self::korean_study_preset() } else { crate::command::default_indicators() },
+            oscillator_share: None,
+            oscillator_weights: Vec::new(),
             custom_sma_length: 30,
             custom_slow_stoch: [5, 2, 2],
             drawings: Vec::new(),
@@ -199,6 +229,27 @@ impl ChartState {
 
     pub fn is_empty(&self) -> bool {
         self.bars.is_empty()
+    }
+
+    /// Splitter 0 changes the total oscillator area, keeping the relative
+    /// heights of all studies. Splitters 1..N-1 resize two adjacent studies.
+    fn resize_oscillator_splitter(&mut self, height: f32, count: usize, splitter: usize, delta_y: f32) {
+        if count == 0 || !delta_y.is_finite() || delta_y == 0.0 || splitter >= count {
+            return;
+        }
+        let (price, mut sizes, min_pane) =
+            oscillator_heights(height, count, self.oscillator_share, &self.oscillator_weights);
+        if splitter == 0 {
+            let min_price = (height * 0.25).max(90.0).min(height - count as f32 * min_pane);
+            let next_price = (price + delta_y).clamp(min_price, height - count as f32 * min_pane);
+            self.oscillator_share = Some((height - next_price) / height);
+        } else {
+            let i = splitter - 1;
+            let change = delta_y.clamp(min_pane - sizes[i], sizes[i + 1] - min_pane);
+            sizes[i] += change;
+            sizes[i + 1] -= change;
+            self.oscillator_weights = sizes.into_iter().map(|h| (h - min_pane).max(0.001)).collect();
+        }
     }
 
     /// (Re)load history for the current symbol and timeframe.
@@ -810,14 +861,9 @@ impl ChartState {
         // Split plot height between the price pane and oscillator sub-panes.
         let pane_groups = oscillator_groups(&self.built);
         let n_sub = pane_groups.len().min(MAX_SUB_PANES);
-        // Sub-panes share at most 60% of the plot so prices stay readable.
-        let sub_h = if n_sub > 0 {
-            (plot_all.height() * 0.2).clamp(50.0, 160.0).min(plot_all.height() * 0.6 / n_sub as f32)
-        } else {
-            0.0
-        };
-        let price_rect =
-            Rect::from_min_max(plot_all.min, pos2(plot_all.right(), plot_all.bottom() - sub_h * n_sub as f32));
+        let (price_h, sub_heights, _) =
+            oscillator_heights(plot_all.height(), n_sub, self.oscillator_share, &self.oscillator_weights);
+        let price_rect = Rect::from_min_max(plot_all.min, pos2(plot_all.right(), plot_all.top() + price_h));
 
         let len = self.bars.len();
         if let Some(g) = self.glide.as_mut() {
@@ -834,6 +880,40 @@ impl ChartState {
 
         // ---- input ----
         let plot_resp = ui.interact(plot_all, ui.id().with((self.id, "plot")), Sense::click_and_drag());
+        // Register narrow draggable gutters above the plot's pan/zoom hit
+        // area. The first divider grows/shrinks the whole indicator stack;
+        // subsequent dividers only redistribute neighboring pane heights.
+        let mut splitter_y = price_rect.bottom();
+        let mut splitter_hovered = false;
+        let mut splitter_dragged = false;
+        let mut highlighted_splitter = None;
+        for splitter in 0..n_sub {
+            if splitter > 0 {
+                splitter_y += sub_heights[splitter - 1];
+            }
+            let gutter =
+                Rect::from_min_max(pos2(plot_all.left(), splitter_y - 6.0), pos2(plot_all.right(), splitter_y + 6.0));
+            let resp = ui.interact(gutter, ui.id().with((self.id, "study-divider", splitter)), Sense::click_and_drag());
+            if resp.hovered() || resp.dragged() {
+                splitter_hovered = true;
+                highlighted_splitter = Some(splitter);
+                ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+            }
+            if resp.dragged() {
+                splitter_dragged = true;
+                let dy = ui.input(|i| i.pointer.delta().y);
+                self.resize_oscillator_splitter(plot_all.height(), n_sub, splitter, dy);
+                ui.ctx().request_repaint();
+                clicked = true;
+            }
+            if resp.double_clicked() {
+                // A quick way to recover default heights without removing
+                // any studies or resetting the price viewport.
+                self.oscillator_share = None;
+                self.oscillator_weights.clear();
+                clicked = true;
+            }
+        }
         let axis_rect =
             Rect::from_min_max(pos2(price_rect.right(), price_rect.top()), pos2(body.right(), price_rect.bottom()));
         let axis_resp = ui.interact(axis_rect, ui.id().with((self.id, "paxis")), Sense::click_and_drag());
@@ -843,12 +923,12 @@ impl ChartState {
         if plot_resp.clicked() || plot_resp.drag_started() || axis_resp.clicked() || time_resp.clicked() {
             clicked = true;
         }
-        let hover = plot_resp.hover_pos().filter(|p| self.hover_enabled && plot_all.contains(*p));
+        let hover = plot_resp.hover_pos().filter(|p| self.hover_enabled && !splitter_hovered && plot_all.contains(*p));
         if self.draw.tool.is_none() {
             plot_resp.context_menu(|ui| self.context_menu(ui, w));
         }
 
-        if plot_resp.hovered() || axis_resp.hovered() || time_resp.hovered() {
+        if (plot_resp.hovered() && !splitter_hovered) || axis_resp.hovered() || time_resp.hovered() {
             let (scroll, zoom_delta) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
             if scroll != egui::Vec2::ZERO || zoom_delta != 1.0 {
                 self.glide = None;
@@ -867,10 +947,10 @@ impl ChartState {
                 v.pan_px(scroll.x as f64);
             }
         }
-        if (self.draw.tool.is_none() && plot_resp.dragged()) || time_resp.dragged() {
+        if (self.draw.tool.is_none() && plot_resp.dragged() && !splitter_dragged) || time_resp.dragged() {
             self.glide = None;
         }
-        if self.draw.tool.is_none() && plot_resp.dragged() {
+        if self.draw.tool.is_none() && plot_resp.dragged() && !splitter_dragged {
             let d = plot_resp.drag_delta();
             self.viewport.as_mut().expect("viewport").pan_px(d.x as f64);
             if let Some(s) = self.manual_scale.as_mut() {
@@ -986,10 +1066,12 @@ impl ChartState {
 
         // Sub panes.
         let mut sub_rects = Vec::new();
+        let mut pane_top = price_rect.bottom();
         for (k, members) in pane_groups.iter().take(n_sub).enumerate() {
             let b = &self.built[members[0]];
-            let top = price_rect.bottom() + sub_h * k as f32;
-            let r = Rect::from_min_max(pos2(plot_all.left(), top), pos2(plot_all.right(), top + sub_h));
+            let bottom = if k + 1 == n_sub { plot_all.bottom() } else { pane_top + sub_heights[k] };
+            let r = Rect::from_min_max(pos2(plot_all.left(), pane_top), pos2(plot_all.right(), bottom));
+            pane_top = bottom;
             let def = b.spec.def();
             let ovs: Vec<Overlay> =
                 members.iter().flat_map(|&i| self.built[i].overlays.iter().map(|o| o.1.clone())).collect();
@@ -1007,6 +1089,22 @@ impl ChartState {
             let frame = Frame { pane: self.id * 8 + 1 + k as u64, frame_no, cmds: so.cmds };
             ui.painter().add(tr_chart::egui_wgpu::Callback::new_paint_callback(r, ChartCallback(Arc::new(frame))));
             sub_rects.push((r, members.clone(), so.scale));
+        }
+        // Visible but unobtrusive resize affordances at every separator.
+        // Draw after GPU callback commands so the hovered grip stays visible.
+        let mut y = price_rect.bottom();
+        for splitter in 0..n_sub {
+            if splitter > 0 {
+                y += sub_heights[splitter - 1];
+            }
+            let active = highlighted_splitter == Some(splitter);
+            let color = if active { theme::accent() } else { theme::border() };
+            let p = ui.painter_at(plot_all);
+            p.hline(plot_all.x_range(), y, Stroke::new(if active { 2.0 } else { 1.0 }, color));
+            let x = plot_all.center().x;
+            for offset in [-7.0, 0.0, 7.0] {
+                p.hline((x + offset - 2.5)..=(x + offset + 2.5), y, Stroke::new(2.0, color));
+            }
         }
 
         // ---- axes ----
@@ -1784,6 +1882,43 @@ fn end_of_history(was: bool, exhausted: bool, prepended: usize, full: bool) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indicator_dividers_resize_total_stack_and_neighboring_panes_independently() {
+        let mut chart = ChartState::new(1, "005930.KS", Timeframe::D1);
+        let height = 900.0;
+        let (initial_price, initial_panes, min_pane) = oscillator_heights(height, 4, None, &[]);
+        assert!((initial_price + initial_panes.iter().sum::<f32>() - height).abs() < 0.001);
+        assert!(initial_price > height * 0.5, "price pane should dominate by default");
+        assert!(initial_panes.iter().all(|h| *h > min_pane));
+
+        chart.resize_oscillator_splitter(height, 4, 0, 160.0);
+        let (price, smaller, _) = oscillator_heights(height, 4, chart.oscillator_share, &chart.oscillator_weights);
+        assert!((price - initial_price - 160.0).abs() < 0.01);
+        assert!(smaller.iter().zip(&initial_panes).all(|(a, b)| a < b));
+        assert!((price + smaller.iter().sum::<f32>() - height).abs() < 0.001);
+
+        chart.resize_oscillator_splitter(height, 4, 2, 24.0);
+        let (price_after, adjusted, _) =
+            oscillator_heights(height, 4, chart.oscillator_share, &chart.oscillator_weights);
+        assert!((price_after - price).abs() < 0.01, "inner splitter should not resize the price panel");
+        assert!((adjusted[0] - smaller[0]).abs() < 0.01);
+        assert!((adjusted[1] - smaller[1] - 24.0).abs() < 0.01);
+        assert!((adjusted[2] - smaller[2] + 24.0).abs() < 0.01);
+        assert!((adjusted[3] - smaller[3]).abs() < 0.01);
+
+        chart.resize_oscillator_splitter(height, 4, 2, 100_000.0);
+        let (_, clamped, min_pane) = oscillator_heights(height, 4, chart.oscillator_share, &chart.oscillator_weights);
+        assert!(clamped.iter().all(|h| *h >= min_pane - 0.001));
+        chart.resize_oscillator_splitter(height, 4, 0, -100_000.0);
+        let (price, _, _) = oscillator_heights(height, 4, chart.oscillator_share, &chart.oscillator_weights);
+        assert!(price >= height * 0.25, "even an extreme drag cannot hide the main price chart");
+
+        let (restored_price, restored_panes, _) =
+            oscillator_heights(720.0, 4, chart.oscillator_share, &chart.oscillator_weights);
+        assert!((restored_price + restored_panes.iter().sum::<f32>() - 720.0).abs() < 0.01);
+        assert_eq!(oscillator_heights(900.0, 0, None, &[]).1, Vec::<f32>::new());
+    }
 
     #[test]
     fn korean_default_has_four_smas_and_three_separate_stoch_kd_panes() {
