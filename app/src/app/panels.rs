@@ -26,7 +26,8 @@ impl TerminalApp {
         if let PaneKind::Chart(c) = &mut self.panes[i].kind {
             c.hover_enabled = !dragging;
             c.switch_to = switch_to;
-            let clicked = c.show(ui, rect, focused, &self.worker);
+            let quote = self.quotes.get(&c.symbol);
+            let clicked = c.show(ui, rect, focused, &self.worker, quote);
             actions.append(&mut c.actions);
             return (actions, clicked);
         }

@@ -54,6 +54,23 @@ pub fn quote_context(q: &Quote, now: i64) -> String {
     format!("{source}\nObserved {when} ({ago})\nPrices may be delayed; check exchange session")
 }
 
+/// Show Kiwoom's actual market observation time, not the opening time of the
+/// daily candle (09:00 KST) or the time Terminal-rs polled the REST endpoint.
+/// Always use Korean exchange time, regardless of the Mac's display timezone.
+pub fn kiwoom_observation_label(q: &Quote) -> Option<String> {
+    if !q.source.as_deref()?.starts_with("Kiwoom") || q.ts <= 0 {
+        return None;
+    }
+    let kst = chrono::FixedOffset::east_opt(9 * 3600)?;
+    let observation = chrono::DateTime::<chrono::Utc>::from_timestamp(q.ts, 0)?.with_timezone(&kst);
+    let now = chrono::Utc::now().with_timezone(&kst);
+    if observation.date_naive() == now.date_naive() {
+        Some(format!("Obs {} KST", observation.format("%H:%M:%S")))
+    } else {
+        Some(format!("Obs {} KST", observation.format("%m/%d %H:%M:%S")))
+    }
+}
+
 fn sparkline(ui: &Ui, rect: Rect, values: &[f64], color: Color32) {
     let v: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
     if v.len() < 2 {
@@ -124,7 +141,11 @@ fn row(ui: &mut Ui, l: &Listing, quotes: &HashMap<String, Quote>, out: &mut Vec<
     let name_left = x + 70.0;
     if name_right - name_left > 36.0 {
         let clip = Rect::from_min_max(pos2(name_left, rect.top()), pos2(name_right, rect.bottom()));
-        p.with_clip_rect(clip).text(pos2(name_left, y), Align2::LEFT_CENTER, l.name, ui_font(11.5), muted());
+        let name = match q.and_then(kiwoom_observation_label) {
+            Some(observed) => format!("{} · {observed}", l.name),
+            None => l.name.to_string(),
+        };
+        p.with_clip_rect(clip).text(pos2(name_left, y), Align2::LEFT_CENTER, name, ui_font(11.5), muted());
     }
 }
 
@@ -424,6 +445,31 @@ mod tests {
         assert!(info.contains("Prices may be delayed"));
         let missing = quote_context(&Quote { ts: 0, ..q }, 2200);
         assert!(missing.contains("unavailable"));
+    }
+
+    #[test]
+    fn kiwoom_observation_label_is_separate_from_candle_open_and_uses_kst() {
+        let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+        let dt = chrono::NaiveDate::from_ymd_opt(2026, 11, 5)
+            .unwrap()
+            .and_hms_opt(15, 32, 20)
+            .unwrap()
+            .and_local_timezone(kst)
+            .single()
+            .unwrap();
+        let q = Quote {
+            symbol: "KOSPI Index".into(),
+            last: 5383.8,
+            prev_close: 5683.8,
+            ts: dt.timestamp(),
+            spark: Vec::new(),
+            source: Some("Kiwoom REST".into()),
+        };
+        let label = kiwoom_observation_label(&q).unwrap();
+        assert!(label.contains("15:32:20 KST"), "{label}");
+        assert!(!label.contains("09:00"), "{label}");
+        assert!(kiwoom_observation_label(&Quote { ts: 0, ..q.clone() }).is_none());
+        assert!(kiwoom_observation_label(&Quote { source: Some("Yahoo Finance".into()), ..q }).is_none());
     }
 
     #[test]

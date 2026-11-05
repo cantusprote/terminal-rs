@@ -15,6 +15,7 @@ use tr_chart::viewport::{PriceScale, Viewport};
 use tr_congress::{Trade, TxType};
 use tr_core::indicators::registry::{self, Category};
 use tr_core::{AssetClass, Bar, Security, Timeframe};
+use tr_data::Quote;
 
 use crate::command::{IndicatorSpec, Range};
 use crate::congress_view::Action;
@@ -571,7 +572,7 @@ impl ChartState {
         clicked
     }
 
-    pub fn show(&mut self, ui: &mut Ui, rect: Rect, focused: bool, w: &Worker) -> bool {
+    pub fn show(&mut self, ui: &mut Ui, rect: Rect, focused: bool, w: &Worker, quote: Option<&Quote>) -> bool {
         let painter = ui.painter_at(rect);
         // Sits under a tab strip inside a card: square top, rounded bottom.
         let r = theme::CARD_RADIUS.saturating_sub(1);
@@ -654,6 +655,20 @@ impl ChartState {
             mono(10.5),
             status_color,
         );
+        if let Some(observed) = quote.and_then(crate::markets_view::kiwoom_observation_label) {
+            // A small observation-time tag in the existing bottom range row.
+            // Leave the candle's x-axis untouched: on D1, 09:00 is the bar
+            // opening time, not the market observation timestamp.
+            let observed_galley = painter.layout_no_wrap(observed, mono(10.5), muted());
+            let observed_x = status.left() - observed_galley.size().x - 10.0;
+            if observed_x > rx + 8.0 {
+                painter.galley(
+                    pos2(observed_x, range_row.center().y - observed_galley.size().y / 2.0),
+                    observed_galley,
+                    muted(),
+                );
+            }
+        }
         if let Some(target) = self.switch_to {
             let room = status.left() - 12.0 - (rx + 10.0);
             clicked |= self.switch_chip(ui, &painter, pos2(rx + 10.0, range_row.center().y), room, target);

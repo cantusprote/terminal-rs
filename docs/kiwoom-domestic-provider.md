@@ -132,6 +132,12 @@ Real-data validation (2026-11-05, existing authenticated CLI):
   the quote parser skips it and uses the next genuine exchange observation
   (`15:32:20` in the captured sample), rather than marking 09:00 or
   assuming the HTTP request time was a trade time.
+- Without changing the GUI layout, Korean quotes now show
+  `Obs HH:MM:SS KST` beside the market name in the world-markets overview,
+  and in the chart's existing bottom status row when space permits.
+  Hovering a quote still shows its complete provider/timestamp provenance.
+  The daily-candle time axis remains at 09:00 (bar opening), separate
+  from the actual exchange quote observation.
 - Active sSb MCP Loader: `terminal_quote` routed KOSPI/KOSDAQ/005930
   through Kiwoom, whereas AAPL remained on the existing Apple Stocks/Yahoo
   foreign-provider path; `terminal_history`, `terminal_book`, and
