@@ -26,6 +26,25 @@ pub fn change_text(sec: &Security, q: &Quote) -> String {
     }
 }
 
+/// The market code remains the key for quotes, alerts, layouts and CLI/MCP.
+/// Only the displayed label is localized. Foreign tickers keep their usual
+/// concise symbol labels; unknown Korean names fall back to their code.
+pub fn security_display_name(sec: &Security, korean_names: &HashMap<String, String>) -> String {
+    let korean = matches!(sec.ticker.as_str(), "KOSPI" | "KOSDAQ" | "KOSPI200")
+        || sec.ticker.ends_with(".KS")
+        || sec.ticker.ends_with(".KQ")
+        || (sec.ticker.len() == 6 && sec.ticker.bytes().all(|b| b.is_ascii_digit()));
+    if korean {
+        korean_names
+            .get(&sec.key())
+            .cloned()
+            .or_else(|| sec.name().map(str::to_owned))
+            .unwrap_or_else(|| sec.ticker.clone())
+    } else {
+        sec.ticker.clone()
+    }
+}
+
 /// Observation provenance is per symbol: an Apple-cache quote does not imply
 /// that other rows came from Apple, and a recently returned API response does
 /// not mean the *market observation* was recent.
@@ -427,6 +446,27 @@ mod tests {
             source: None,
         };
         assert_eq!(change_text(&Security::parse("EURUSD Curncy").unwrap(), &q), "+0.0012");
+    }
+
+    #[test]
+    fn korean_names_are_display_only_and_foreign_tickers_unchanged() {
+        let names = HashMap::from([("035720.KS US Equity".into(), "카카오".into())]);
+        for (symbol, expected) in [
+            ("KOSPI", "코스피"),
+            ("KOSDAQ", "코스닥"),
+            ("005930.KS", "삼성전자"),
+            ("000660.KS", "SK하이닉스"),
+            ("035720.KS", "카카오"),
+            ("AAPL", "AAPL"),
+            ("BTCUSD", "BTCUSD"),
+        ] {
+            let sec = tr_data::security(symbol);
+            assert_eq!(security_display_name(&sec, &names), expected, "{symbol}");
+            if symbol.ends_with(".KS") || symbol.ends_with(".KQ") {
+                assert!(sec.key().ends_with(" US Equity"), "stored market key must not change");
+            }
+        }
+        assert_eq!(security_display_name(&tr_data::security("123456.KS"), &names), "123456.KS");
     }
 
     #[test]

@@ -145,6 +145,23 @@ Real-data validation (2026-11-05, existing authenticated CLI):
   and candle OHLCV data are unchanged. This corrects the nine-hour chart
   display offset (e.g., 15:30 KST was previously drawn as 06:30).
   Overseas charts continue using their existing timestamp format.
+- Korean stocks, ETFs and Korean indices use local market chart colors:
+  **red for rising / blue for falling** candlesticks, OHLC bars and volume,
+  with matching chart price labels and direction legend (both dark and
+  light themes). Overseas market charts retain their existing green/red
+  or user-selected theme colors; only Korean **charts** are affected.
+- Domestic symbols are displayed as Korean **company/index names** in the
+  Watchlist, watchlist screen, chart headers/legends, and chart tabs
+  (`005930.KS` → `삼성전자`, `000660.KS` → `SK하이닉스`,
+  `KOSPI` → `코스피`, `KOSDAQ` → `코스닥`). The saved symbol keys,
+  price queries, alerts, CLI, and MCP APIs **remain unchanged**. Users can
+  find the technical symbol in the sidebar hover text. Other domestic
+  stock names are resolved asynchronously through the existing Kiwoom
+  `stocks info-list` catalog and displayed once available; when a name
+  cannot be resolved, the original symbol remains visible. On macOS, the
+  app registers the locally installed Apple Gothic typeface as an egui font
+  fallback for both chart/Watchlist text families so Hangul names render
+  correctly; no system font is copied or packaged with the app.
 - Active sSb MCP Loader: `terminal_quote` routed KOSPI/KOSDAQ/005930
   through Kiwoom, whereas AAPL remained on the existing Apple Stocks/Yahoo
   foreign-provider path; `terminal_history`, `terminal_book`, and

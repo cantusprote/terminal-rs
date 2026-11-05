@@ -145,6 +145,8 @@ pub enum Request {
     Forget(PaneId),
     YieldCurves,
     Search(String),
+    /// Resolve Korean display names asynchronously; do not change symbol keys.
+    SecurityNames(Vec<String>),
     /// The HIP-3 perps the Terminal server lists as live.
     PerpMarkets,
 }
@@ -261,6 +263,7 @@ pub enum Response {
         query: String,
         hits: Vec<SearchHit>,
     },
+    SecurityNames(Vec<(String, String)>),
     /// Live HIP-3 perps (`xyz:AAPL`), or why the server couldn't say.
     PerpMarkets(Result<Vec<String>, String>),
 }
@@ -787,6 +790,24 @@ async fn handle(s: &Arc<Shared>, req: Request) {
         Request::Search(query) => {
             let hits = s.provider.search(&query).await.unwrap_or_default();
             s.send(Response::SearchHits { query, hits });
+        }
+        Request::SecurityNames(keys) => {
+            let mut resolved = Vec::new();
+            for key in keys {
+                let sec = tr_data::security(&key);
+                let ticker = sec.ticker.trim_end_matches(".KS").trim_end_matches(".KQ");
+                if ticker.len() != 6 || !ticker.bytes().all(|b| b.is_ascii_digit()) {
+                    continue;
+                }
+                if let Ok(hits) = s.provider.search(ticker).await
+                    && let Some(hit) = hits.into_iter().find(|hit| hit.key == sec.key())
+                {
+                    resolved.push((sec.key(), hit.name));
+                }
+            }
+            if !resolved.is_empty() {
+                s.send(Response::SecurityNames(resolved));
+            }
         }
     }
 }

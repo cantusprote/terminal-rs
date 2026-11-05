@@ -505,6 +505,9 @@ impl TerminalApp {
     pub(super) fn set_pane_symbol(&mut self, i: usize, symbol: &str) -> bool {
         let id = self.panes[i].id;
         let key = tr_data::security(symbol).key();
+        if !self.security_names.contains_key(&key) {
+            self.request_security_names(vec![key.clone()]);
+        }
         match &mut self.panes[i].kind {
             PaneKind::Chart(c) => {
                 if c.symbol != key {
@@ -631,6 +634,11 @@ impl TerminalApp {
     /// tab beside a suitable panel, else split it in next to the focused pane. Panels the
     /// user arranged are never discarded.
     pub(super) fn open_panel(&mut self, kind: PaneKind) {
+        if let PaneKind::Chart(chart) = &kind
+            && !self.security_names.contains_key(&chart.symbol)
+        {
+            self.request_security_names(vec![chart.symbol.clone()]);
+        }
         let disc = std::mem::discriminant(&kind);
         let same = self.panes.iter().any(|p| std::mem::discriminant(&p.kind) == disc);
         let id = match self.target_pane(|k| std::mem::discriminant(k) == disc) {
@@ -1130,6 +1138,16 @@ impl TerminalApp {
             let Some(i) = self.idx(pid) else { continue };
             let pane = &self.panes[i];
             let (title, code, link) = (pane.display_title(), pane.kind.code(), pane.link);
+            let title = if pane.title.is_none() {
+                match &pane.kind {
+                    PaneKind::Chart(c) => {
+                        crate::markets_view::security_display_name(&tr_data::security(&c.symbol), &self.security_names)
+                    }
+                    _ => title,
+                }
+            } else {
+                title
+            };
             let is_active = ti == g.active;
             let code_g = p.layout_no_wrap(code.to_string(), mono(10.0), amber());
             let title_g = p.layout_no_wrap(title.clone(), ui_font(12.0), text());

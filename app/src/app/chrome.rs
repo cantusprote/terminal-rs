@@ -537,12 +537,22 @@ impl TerminalApp {
             let mut remove = None;
             for key in &self.watchlist {
                 let sec = tr_data::security(key);
+                let display_name = markets_view::security_display_name(&sec, &self.security_names);
                 let resp = row_frame(ui, false);
                 let r = resp.rect;
                 let pt = ui.painter();
                 let perp = sec.class == tr_core::AssetClass::Perp;
                 let tc = if perp { theme::perp() } else { text() };
-                pt.text(pos2(r.left() + 8.0, r.center().y), Align2::LEFT_CENTER, &sec.ticker, mono(12.0), tc);
+                // Keep the stable ticker in watchlist settings and CLI.
+                // Display the Korean stock name, with the code in the hover.
+                let name_clip = Rect::from_min_max(r.min, pos2((r.right() - 117.0).max(r.left() + 30.0), r.bottom()));
+                pt.with_clip_rect(name_clip).text(
+                    pos2(r.left() + 8.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    &display_name,
+                    mono(12.0),
+                    tc,
+                );
                 if let Some(q) = self.quotes.get(key) {
                     let up = q.change() >= 0.0;
                     let c = if up { theme::up() } else { theme::down() };
@@ -577,7 +587,7 @@ impl TerminalApp {
                         sec.name().unwrap_or("HIP-3 perp"),
                         tr_core::perps::badge(key)
                     ),
-                    false => format!("{} — {}", sec.key(), sec.name().unwrap_or(&sec.ticker)),
+                    false => format!("{} — {}", display_name, sec.key()),
                 });
                 resp.context_menu(|ui| {
                     if ui.button("Open Chart").clicked() {

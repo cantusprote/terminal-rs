@@ -241,6 +241,18 @@ fn install_fonts(ctx: &egui::Context, mono: MonoFont) {
             fonts.families.entry(family.clone()).or_default().insert(0, (*name).into());
         }
     }
+    // egui does not automatically use CoreText's OS fallback fonts. Korean
+    // company/index names need an actual Hangul font registered in *both*
+    // families (the watchlist and chart labels use SF Mono by default).
+    // Load it from macOS only at runtime; never bundle a system font.
+    #[cfg(target_os = "macos")]
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/Supplemental/AppleGothic.ttf") {
+        let name = "system-hangul";
+        fonts.font_data.insert(name.into(), std::sync::Arc::new(FontData::from_owned(bytes)));
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(name.into());
+        }
+    }
     ctx.set_fonts(fonts);
 }
 

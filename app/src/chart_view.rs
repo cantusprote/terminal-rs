@@ -542,14 +542,34 @@ impl ChartState {
         b[i as usize].ts
     }
 
+    fn is_korean_market(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if tr_data::kiwoom::is_domestic(&self.sec) {
+            return true;
+        }
+        false
+    }
+
+    /// Korea: rising red / falling blue, for the candlesticks, volume bars
+    /// and price-direction legend. Other markets keep their chosen theme.
+    fn direction_colors(&self, candle: bool) -> (Color32, Color32) {
+        if self.is_korean_market() {
+            if theme::palette().dark {
+                (Color32::from_rgb(255, 82, 82), Color32::from_rgb(72, 142, 255))
+            } else {
+                (Color32::from_rgb(209, 44, 44), Color32::from_rgb(31, 93, 209))
+            }
+        } else if candle {
+            (theme::candle_up(), theme::candle_down())
+        } else {
+            (theme::up(), theme::down())
+        }
+    }
+
     /// The chart keeps absolute Unix bar times. Only Korean-market labels
     /// use KST; foreign-market labels retain their existing formatting.
     fn axis_utc_offset_secs(&self) -> i32 {
-        #[cfg(not(target_arch = "wasm32"))]
-        if tr_data::kiwoom::is_domestic(&self.sec) {
-            return 9 * 3600;
-        }
-        0
+        if self.is_korean_market() { 9 * 3600 } else { 0 }
     }
 
     // ---- rendering --------------------------------------------------------------------
@@ -582,7 +602,15 @@ impl ChartState {
         clicked
     }
 
-    pub fn show(&mut self, ui: &mut Ui, rect: Rect, focused: bool, w: &Worker, quote: Option<&Quote>) -> bool {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        focused: bool,
+        w: &Worker,
+        quote: Option<&Quote>,
+        display_name: &str,
+    ) -> bool {
         let painter = ui.painter_at(rect);
         // Sits under a tab strip inside a card: square top, rounded bottom.
         let r = theme::CARD_RADIUS.saturating_sub(1);
@@ -601,7 +629,7 @@ impl ChartState {
                     .id_salt((self.id, "header")),
             );
             hui.spacing_mut().item_spacing.x = 6.0;
-            hui.label(RichText::new(&self.sec.ticker).font(mono(12.0)).color(amber()));
+            hui.label(RichText::new(display_name).font(mono(12.0)).color(amber()));
             if self.sec.class == AssetClass::Perp {
                 hui.label(RichText::new(tr_core::perps::badge(&self.symbol)).font(ui_font(11.0)).color(theme::perp()));
             }
@@ -820,9 +848,10 @@ impl ChartState {
         let reveal_t =
             crate::anim::progress(ui.ctx(), egui::Id::new(("chart-reveal", self.id)), self.reveal_key, REVEAL_SECS);
         let reveal = Reveal { opacity: ui.opacity(), ..Reveal::sweep(reveal_t, v.left(), v.visible_bars()) };
+        let (candle_up, candle_down) = self.direction_colors(true);
         let style = Style {
-            up: theme::rgba(theme::candle_up()),
-            down: theme::rgba(theme::candle_down()),
+            up: theme::rgba(candle_up),
+            down: theme::rgba(candle_down),
             color: theme::rgba(amber()),
             pixels_per_point: ui.ctx().pixels_per_point(),
             reveal,
@@ -972,7 +1001,8 @@ impl ChartState {
         {
             let y = price_rect.top() + scale.y_of(last.close) as f32;
             if price_rect.y_range().contains(y) {
-                let col = if last.is_up() { theme::up() } else { theme::down() };
+                let (up, down) = self.direction_colors(false);
+                let col = if last.is_up() { up } else { down };
                 let mut xx = price_rect.left();
                 while xx < price_rect.right() {
                     price_painter.hline(
@@ -1037,7 +1067,7 @@ impl ChartState {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
             }
         }
-        self.paint_legend(ui, price_rect, hovered_bar.unwrap_or(len.saturating_sub(1)), &sub_rects);
+        self.paint_legend(ui, price_rect, hovered_bar.unwrap_or(len.saturating_sub(1)), &sub_rects, display_name);
 
         let _ = focused; // the surrounding card shows focus
         clicked
@@ -1159,12 +1189,20 @@ impl ChartState {
         resp.clicked()
     }
 
-    fn paint_legend(&self, ui: &Ui, price_rect: Rect, i: usize, sub_rects: &[(Rect, usize, PriceScale)]) {
+    fn paint_legend(
+        &self,
+        ui: &Ui,
+        price_rect: Rect,
+        i: usize,
+        sub_rects: &[(Rect, usize, PriceScale)],
+        display_name: &str,
+    ) {
         let Some(b) = self.bars.get(i) else { return };
         let p = ui.painter_at(price_rect);
         let prev = if i > 0 { self.bars[i - 1].close } else { b.open };
         let chg = b.close - prev;
-        let col = if chg >= 0.0 { theme::up() } else { theme::down() };
+        let (up, down) = self.direction_colors(false);
+        let col = if chg >= 0.0 { up } else { down };
         let dec = self.sec.decimals(b.close);
         let mut x = price_rect.left() + 6.0;
         let y = price_rect.top() + 4.0;
@@ -1173,7 +1211,7 @@ impl ChartState {
             p.galley(pos2(*x, y), g.clone(), color);
             *x += g.size().x + 8.0;
         };
-        put(format!("{} · {}", self.sec.ticker, self.tf), amber(), &mut x);
+        put(format!("{display_name} · {}", self.tf), amber(), &mut x);
         if self.sec.class == AssetClass::Perp {
             put(tr_core::perps::badge(&self.symbol), theme::perp(), &mut x);
         }
@@ -1522,6 +1560,22 @@ fn end_of_history(was: bool, exhausted: bool, prepended: usize, full: bool) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_charts_are_red_up_blue_down_without_affecting_foreign_markets() {
+        for symbol in ["KOSPI", "KOSDAQ", "005930.KS", "000660.KS"] {
+            let chart = ChartState::new(1, symbol, Timeframe::D1);
+            let (up, down) = chart.direction_colors(true);
+            assert!(up.r() > up.b() && up.r() > up.g(), "{symbol}: rising candle should be red");
+            assert!(down.b() > down.r() && down.b() > down.g(), "{symbol}: falling candle should be blue");
+            assert_eq!(chart.direction_colors(false), (up, down), "{symbol}: price labels match candles");
+        }
+        for symbol in ["AAPL", "NVDA", "SPX", "BTCUSD"] {
+            let chart = ChartState::new(2, symbol, Timeframe::D1);
+            assert_eq!(chart.direction_colors(true), (theme::candle_up(), theme::candle_down()), "{symbol}");
+            assert_eq!(chart.direction_colors(false), (theme::up(), theme::down()), "{symbol}");
+        }
+    }
 
     /// Bars from the disk cache whose refresh failed say so, so a perp whose server is down
     /// never passes for live. A failed page of older bars leaves the shown ones as they are.

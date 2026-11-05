@@ -60,6 +60,7 @@ impl TerminalApp {
                 }
                 if !self.watchlist.contains(&key) {
                     self.watchlist.push(key.clone());
+                    self.request_security_names(vec![key.clone()]);
                     self.last_quotes = None;
                     self.last_technicals = None;
                     self.save_settings();

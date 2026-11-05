@@ -172,9 +172,9 @@ pub static CATALOG: LazyLock<Vec<Listing>> = LazyLock::new(|| {
         yahoo("NKY", Index, "Nikkei 225", AsiaPac, "^N225", 40000.0),
         yahoo("HSI", Index, "Hang Seng Index", AsiaPac, "^HSI", 20000.0),
         yahoo("SHCOMP", Index, "Shanghai Composite", AsiaPac, "000001.SS", 3300.0),
-        yahoo("KOSPI", Index, "KOSPI Index", AsiaPac, "^KS11", 2600.0),
-        yahoo("KOSDAQ", Index, "KOSDAQ Index", AsiaPac, "^KQ11", 900.0),
-        yahoo("KOSPI200", Index, "KOSPI 200 Index", AsiaPac, "^KS200", 350.0),
+        yahoo("KOSPI", Index, "코스피", AsiaPac, "^KS11", 2600.0),
+        yahoo("KOSDAQ", Index, "코스닥", AsiaPac, "^KQ11", 900.0),
+        yahoo("KOSPI200", Index, "코스피200", AsiaPac, "^KS200", 350.0),
         yahoo("AS51", Index, "S&P/ASX 200", AsiaPac, "^AXJO", 8200.0),
         yahoo("SENSEX", Index, "BSE Sensex", AsiaPac, "^BSESN", 80000.0),
         yahoo("TWSE", Index, "Taiwan Weighted Index", AsiaPac, "^TWII", 22000.0),
@@ -260,6 +260,10 @@ pub static CATALOG: LazyLock<Vec<Listing>> = LazyLock::new(|| {
         yahoo("ARKK", Etf, "ARK Innovation ETF", Etfs, "ARKK", 50.0),
         yahoo("IBIT", Etf, "iShares Bitcoin Trust", Etfs, "IBIT", 38.0),
         // Large-cap stocks (any other ticker resolves as a US equity)
+        // Localized names for commonly watched Korean stocks. The rest of
+        // the Korean universe is resolved at runtime from Kiwoom's catalog.
+        yahoo("005930.KS", Equity, "삼성전자", Stocks, "005930.KS", 200000.0),
+        yahoo("000660.KS", Equity, "SK하이닉스", Stocks, "000660.KS", 300000.0),
         yahoo("AAPL", Equity, "Apple Inc", Stocks, "AAPL", 230.0),
         yahoo("MSFT", Equity, "Microsoft Corp", Stocks, "MSFT", 420.0),
         yahoo("NVDA", Equity, "NVIDIA Corp", Stocks, "NVDA", 130.0),

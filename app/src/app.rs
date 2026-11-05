@@ -506,6 +506,8 @@ pub struct TerminalApp {
     wei_updated: Option<String>,
     /// Latest network search results and the query they answer.
     net_hits: (String, Vec<SearchHit>),
+    /// Korean display names from Kiwoom; never used as trading/quote keys.
+    security_names: HashMap<String, String>,
     /// HIP-3 perps the Terminal server lists as live (`None` until it has answered once), and
     /// when they were last asked for.
     live_perps: Option<Vec<String>>,
@@ -675,6 +677,7 @@ impl TerminalApp {
             last_curve: None,
             wei_updated: None,
             net_hits: (String::new(), Vec::new()),
+            security_names: HashMap::new(),
             live_perps: None,
             last_perps: None,
             search_pending: None,
@@ -767,12 +770,24 @@ impl TerminalApp {
         app.worker.send(Request::Latest { limit: 2_000 });
         app.worker.send(Request::SearchPoliticians(String::new()));
         app.worker.send(Request::Alerts);
+        app.request_security_names(app.watchlist.clone());
         app
     }
 
     /// Replace the status bar message.
     pub fn set_status(&mut self, status: String) {
         self.status = status;
+    }
+
+    fn request_security_names(&self, keys: Vec<String>) {
+        if self.provider.contains("kiwoom-kr")
+            && keys.iter().any(|key| {
+                let ticker = &tr_data::security(key).ticker;
+                ticker.ends_with(".KS") || ticker.ends_with(".KQ")
+            })
+        {
+            self.worker.send(Request::SecurityNames(keys));
+        }
     }
 
     /// Show the frame-time readout (as F12 does); the browser's `?fps` flag.
@@ -817,7 +832,8 @@ impl TerminalApp {
                     let key = tr_data::security(&s).key();
                     if !self.watchlist.contains(&key) {
                         self.status = format!("Added {key} to the watchlist");
-                        self.watchlist.push(key);
+                        self.watchlist.push(key.clone());
+                        self.request_security_names(vec![key]);
                         self.last_quotes = None;
                     }
                 }
@@ -913,11 +929,14 @@ impl TerminalApp {
             Function::PriceAlert(arg) => self.price_alert_command(&arg),
             Function::TechnicalAlert(arg) => self.technical_alert_command(&arg),
             Function::WatchAdd(words) => {
+                let mut added = Vec::new();
                 for key in keys_from_words(&words) {
                     if !self.watchlist.contains(&key) {
-                        self.watchlist.push(key);
+                        self.watchlist.push(key.clone());
+                        added.push(key);
                     }
                 }
+                self.request_security_names(added);
                 self.last_quotes = None;
             }
             Function::WatchRemove(words) => {
@@ -1172,7 +1191,16 @@ impl TerminalApp {
                 }
                 Response::Status(s) => self.status = s,
                 Response::Curves(c) => self.curves = Some(c),
-                Response::SearchHits { query, hits } => self.net_hits = (query, hits),
+                Response::SearchHits { query, hits } => {
+                    for hit in &hits {
+                        let sec = tr_data::security(&hit.key);
+                        if sec.ticker.ends_with(".KS") || sec.ticker.ends_with(".KQ") {
+                            self.security_names.insert(sec.key(), hit.name.clone());
+                        }
+                    }
+                    self.net_hits = (query, hits);
+                }
+                Response::SecurityNames(names) => self.security_names.extend(names),
                 Response::PerpMarkets(result) => {
                     let ok = result.is_ok();
                     match result {

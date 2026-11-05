@@ -27,7 +27,8 @@ impl TerminalApp {
             c.hover_enabled = !dragging;
             c.switch_to = switch_to;
             let quote = self.quotes.get(&c.symbol);
-            let clicked = c.show(ui, rect, focused, &self.worker, quote);
+            let display_name = markets_view::security_display_name(&tr_data::security(&c.symbol), &self.security_names);
+            let clicked = c.show(ui, rect, focused, &self.worker, quote, &display_name);
             actions.append(&mut c.actions);
             return (actions, clicked);
         }
@@ -201,6 +202,7 @@ impl TerminalApp {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for s in &rows {
                 let sec = tr_data::security(s);
+                let display_name = markets_view::security_display_name(&sec, &self.security_names);
                 let (r, resp) = ui.allocate_exact_size(vec2(w, row_h), Sense::click());
                 let info = self.quotes.get(s).map(|q| markets_view::quote_context(q, chrono::Utc::now().timestamp()));
                 let tech = self.technicals.get(s).map(|snap| {
@@ -221,7 +223,7 @@ impl TerminalApp {
                 };
                 widgets::hover_wash(ui, r, &resp, false);
                 let p = ui.painter();
-                let tick = p.layout_no_wrap(sec.ticker.clone(), mono(12.5), amber());
+                let tick = p.layout_no_wrap(display_name, mono(12.5), amber());
                 let label_x = col(r, 0) + tick.size().x.max(66.0) + 8.0;
                 p.galley(pos2(col(r, 0), r.center().y - tick.size().y / 2.0), tick, amber());
                 let (label, lc) = match sec.class {
