@@ -612,6 +612,107 @@ impl TerminalApp {
             if let Some(k) = remove {
                 self.watchlist.retain(|x| *x != k);
             }
+            // Each screenshot group is independent of the original flat list.
+            // Groups begin collapsed to avoid 150 concurrent Kiwoom REST
+            // requests or a sidebar thousands of pixels tall on launch.
+            let mut toggle_group = None;
+            let mut remove_group_symbol: Option<(usize, String)> = None;
+            for (index, group) in self.watchlist_groups.iter().enumerate() {
+                let resp = row_frame(ui, false);
+                let r = resp.rect;
+                let pt = ui.painter();
+                pt.text(
+                    pos2(r.left() + 8.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    if group.collapsed { "▸" } else { "▾" },
+                    ui_font(12.0),
+                    amber(),
+                );
+                let header = Rect::from_min_max(pos2(r.left() + 24.0, r.top()), pos2(r.right() - 32.0, r.bottom()));
+                pt.with_clip_rect(header).text(
+                    pos2(header.left(), r.center().y),
+                    Align2::LEFT_CENTER,
+                    &group.name,
+                    ui_font(11.5),
+                    text(),
+                );
+                pt.text(
+                    pos2(r.right() - 5.0, r.center().y),
+                    Align2::RIGHT_CENTER,
+                    group.symbols.len().to_string(),
+                    mono(10.5),
+                    muted(),
+                );
+                if resp.clicked() {
+                    toggle_group = Some(index);
+                }
+                if group.collapsed {
+                    continue;
+                }
+                for key in &group.symbols {
+                    let sec = tr_data::security(key);
+                    let display_name = markets_view::security_display_name(&sec, &self.security_names);
+                    let resp = row_frame(ui, false);
+                    let r = resp.rect;
+                    let pt = ui.painter();
+                    let name_clip = Rect::from_min_max(
+                        pos2(r.left() + 12.0, r.top()),
+                        pos2((r.right() - 117.0).max(r.left() + 40.0), r.bottom()),
+                    );
+                    pt.with_clip_rect(name_clip).text(
+                        pos2(r.left() + 16.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        &display_name,
+                        mono(11.5),
+                        text(),
+                    );
+                    if let Some(q) = self.quotes.get(key) {
+                        let c = if q.change() >= 0.0 { theme::up() } else { theme::down() };
+                        let pill = Rect::from_min_size(pos2(r.right() - 62.0, r.center().y - 8.0), vec2(58.0, 16.0));
+                        pt.rect_filled(pill, 4.0, c.gamma_multiply(0.16));
+                        pt.text(
+                            pill.right_center() - vec2(5.0, 0.0),
+                            Align2::RIGHT_CENTER,
+                            format!("{:+.2}%", q.change_pct()),
+                            mono(11.0),
+                            c,
+                        );
+                        let d = sec.decimals(q.last);
+                        pt.text(
+                            pos2(pill.left() - 8.0, r.center().y),
+                            Align2::RIGHT_CENTER,
+                            format!("{:.d$}", q.last),
+                            mono(11.5),
+                            text(),
+                        );
+                    }
+                    if resp.clicked() {
+                        out.push(SidebarCmd::Action(Action::OpenChart(key.clone())));
+                    }
+                    resp.on_hover_text(format!("{display_name} — {key}")).context_menu(|ui| {
+                        if ui.button("Open Chart").clicked() {
+                            out.push(SidebarCmd::Action(Action::OpenChart(key.clone())));
+                            ui.close();
+                        }
+                        if ui.button("Remove from This Group").clicked() {
+                            remove_group_symbol = Some((index, key.clone()));
+                            ui.close();
+                        }
+                    });
+                }
+            }
+            if let Some(index) = toggle_group {
+                let group = &mut self.watchlist_groups[index];
+                group.collapsed = !group.collapsed;
+                let symbols = if group.collapsed { Vec::new() } else { group.symbols.clone() };
+                self.request_security_names(symbols);
+                self.last_quotes = None;
+                self.save_settings();
+            }
+            if let Some((index, key)) = remove_group_symbol {
+                self.watchlist_groups[index].symbols.retain(|s| s != &key);
+                self.save_settings();
+            }
             if nav_row(ui, Icon::List, "Open Watchlist Pane", None, is_focused(&PaneKind::Watchlist)).clicked() {
                 out.push(SidebarCmd::Function(Function::Watchlist));
             }

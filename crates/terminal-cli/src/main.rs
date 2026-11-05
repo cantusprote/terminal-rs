@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tr_control::{Command, MAX_MESSAGE_BYTES, Reply, socket_path, valid_expression, valid_symbol};
+use tr_control::{Command, MAX_MESSAGE_BYTES, Reply, WatchlistGroup, socket_path, valid_expression, valid_symbol};
 use tr_core::Timeframe;
 
 const HELP: &str = r#"Terminal-rs CLI (personal, read-only)
@@ -17,6 +17,7 @@ const HELP: &str = r#"Terminal-rs CLI (personal, read-only)
   terminal-cli book SYMBOL [DEPTH=20]
   terminal-cli app status
   terminal-cli app watchlist
+  terminal-cli app groups-import PATH_TO_GROUPS_JSON
   terminal-cli app add SYMBOL
   terminal-cli app remove SYMBOL
   terminal-cli app screen EXPRESSION...
@@ -84,7 +85,7 @@ async fn execute(args: &[String]) -> Result<Value, String> {
     if head == "app" {
         let Some((op, rest)) = args[1..].split_first() else {
             return Err(
-                "app action required: status/watchlist/add/remove/screen/alert/technical-alert/chart/quotes".into()
+                "app action required: status/watchlist/groups-import/add/remove/screen/alert/technical-alert/chart/quotes".into()
             );
         };
         let one = || rest.first().ok_or_else(|| format!("{op} requires a symbol"));
@@ -99,6 +100,18 @@ async fn execute(args: &[String]) -> Result<Value, String> {
         let command = match op.as_str() {
             "status" if rest.is_empty() => Command::Status,
             "watchlist" if rest.is_empty() => Command::Watchlist,
+            "groups-import" if rest.len() == 1 => {
+                let contents = std::fs::read(&rest[0]).map_err(|e| format!("cannot read group manifest: {e}"))?;
+                if contents.len() > MAX_MESSAGE_BYTES - 256 {
+                    return Err("group manifest exceeds the IPC size limit".into());
+                }
+                let root: Value =
+                    serde_json::from_slice(&contents).map_err(|e| format!("invalid group manifest JSON: {e}"))?;
+                let groups: Vec<WatchlistGroup> =
+                    serde_json::from_value(root.get("groups").cloned().ok_or("group manifest must contain groups")?)
+                        .map_err(|e| format!("invalid groups: {e}"))?;
+                Command::WatchGroupsImport { groups }
+            }
             "add" if rest.len() == 1 => Command::WatchAdd { symbol: checked_symbol(one()?)? },
             "remove" if rest.len() == 1 => Command::WatchRemove { symbol: checked_symbol(one()?)? },
             "screen" => Command::Screen { expression: expression()? },

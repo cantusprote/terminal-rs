@@ -7,11 +7,26 @@ use std::path::PathBuf;
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 pub const SOCKET_NAME: &str = "terminal-control.sock";
 
+/// A named watchlist group. A symbol can appear in several groups, but
+/// market-data subscriptions are deduplicated by the GUI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatchlistGroup {
+    pub name: String,
+    pub symbols: Vec<String>,
+    #[serde(default = "default_collapsed")]
+    pub collapsed: bool,
+}
+
+fn default_collapsed() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Status,
     Watchlist,
+    WatchGroupsImport { groups: Vec<WatchlistGroup> },
     WatchAdd { symbol: String },
     WatchRemove { symbol: String },
     Screen { expression: String },
@@ -87,5 +102,47 @@ mod tests {
         let r = Reply::success(serde_json::json!({"read_only":true}));
         let out: Reply = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert!(out.ok && out.data.unwrap()["read_only"] == true);
+    }
+
+    #[test]
+    fn grouped_watchlist_command_preserves_symbols_and_unicode_names() {
+        let c = Command::WatchGroupsImport {
+            groups: vec![WatchlistGroup {
+                name: "반도체기술".into(),
+                symbols: vec!["005930.KS US Equity".into(), "00088K.KS US Equity".into()],
+                collapsed: true,
+            }],
+        };
+        let encoded = serde_json::to_vec(&c).unwrap();
+        assert!(encoded.len() < MAX_MESSAGE_BYTES);
+        let restored: Command = serde_json::from_slice(&encoded).unwrap();
+        match restored {
+            Command::WatchGroupsImport { groups } => {
+                assert_eq!(groups[0].name, "반도체기술");
+                assert_eq!(groups[0].symbols.len(), 2);
+                assert!(groups[0].collapsed);
+            }
+            _ => panic!("wrong command"),
+        }
+    }
+
+    #[test]
+    fn screenshot_manifest_has_fourteen_valid_groups_and_no_duplicate_entries() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../docs/kiwoom-screenshot-watchlists-resolved-2026-11-05.json"))
+                .unwrap();
+        let groups: Vec<WatchlistGroup> = serde_json::from_value(manifest["groups"].clone()).unwrap();
+        assert_eq!(groups.len(), 14);
+        assert_eq!(groups.iter().map(|g| g.symbols.len()).sum::<usize>(), 147);
+        for group in &groups {
+            let symbols: std::collections::HashSet<_> = group.symbols.iter().collect();
+            assert_eq!(symbols.len(), group.symbols.len(), "duplicate within group {}", group.name);
+            for symbol in &group.symbols {
+                assert!(valid_symbol(symbol), "{}: {symbol}", group.name);
+                assert!(symbol.ends_with(".KS") || symbol.ends_with(".KQ"));
+            }
+        }
+        let all: std::collections::HashSet<_> = groups.iter().flat_map(|g| &g.symbols).collect();
+        assert_eq!(all.len(), 140);
     }
 }

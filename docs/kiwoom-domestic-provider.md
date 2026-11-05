@@ -92,6 +92,41 @@ The pre-existing `terminal-cli` binary and all ten
 same `tr_data::from_env()` router, they automatically get Kiwoom
 for Korean symbols, without an extra MCP add-on.
 
+### Screenshot watchlist groups (2026-11-05)
+
+The user's 14 Kiwoom favorites screenshots were transcribed into
+`docs/kiwoom-screenshot-watchlists-source-2026-11-05.json`. Symbol
+codes/exchanges were matched against the live official Kiwoom stock
+catalog in `docs/kiwoom-screenshot-watchlists-resolved-2026-11-05.json`:
+149 source rows, 147 entries after removing two same-group duplicates,
+and 140 unique Korean instruments. A name that appeared in multiple
+groups remains in each group.
+
+To import into a running local GUI (read-only market-data use):
+
+```sh
+target/release/terminal-cli app groups-import \
+  docs/kiwoom-screenshot-watchlists-resolved-2026-11-05.json
+target/release/terminal-cli app watchlist
+```
+
+The original personal Watchlist is preserved as `symbols` in app output
+and as the selectable **기존 관심종목** view. The 14 groups are stored
+separately with their own names, order and collapse state and are
+accessible in the sidebar and the full Watchlist pane's group picker.
+Groups start collapsed. Only expanded/sidebar-visible groups and the
+selected Watchlist-pane group are periodically polled; requests rotate
+in batches of at most 40 symbols, with active price-alert instruments
+prioritized, to respect Kiwoom REST rate limits. Display names come
+from the existing Kiwoom catalog; source market keys are not rewritten.
+
+Re-importing this JSON replaces only the imported groups, not the old
+personal Watchlist instruments already present at import time, layout,
+alerts or preferences. The
+GUI saves imported groups in its existing local `settings.json` file
+and restores them after restart. The import IPC is allowlisted,
+validated and never sends trade or brokerage instructions.
+
 ```sh
 cd /Users/sim/Dev/terminal-rs
 target/release/terminal-cli quote KOSPI KOSDAQ 005930.KS AAPL

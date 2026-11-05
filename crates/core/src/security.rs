@@ -267,11 +267,15 @@ impl fmt::Display for Security {
 
 pub fn looks_like_ticker(s: &str) -> bool {
     let core = s.trim_start_matches('^');
-    // Exchange-qualified South Korean equity tickers are numeric (e.g.
-    // Samsung Electronics 005930.KS). Bare numbers remain reserved for
-    // interval and command input in the terminal.
+    // Korean exchange-qualified codes can contain letters, especially
+    // preferred shares and newer ETFs (00088K.KS, 0048K0.KS). Bare numbers
+    // remain reserved for interval and command input in the terminal.
     let korean_equity = [".KS", ".KQ"].iter().any(|suffix| {
-        core.strip_suffix(suffix).is_some_and(|code| code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()))
+        core.strip_suffix(suffix).is_some_and(|code| {
+            code.len() == 6
+                && code.bytes().all(|b| b.is_ascii_alphanumeric())
+                && code.bytes().any(|b| b.is_ascii_digit())
+        })
     });
     !core.is_empty()
         && core.len() <= 14

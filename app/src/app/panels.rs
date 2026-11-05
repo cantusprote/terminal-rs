@@ -132,6 +132,28 @@ impl TerminalApp {
         let mut out = Vec::new();
         let row_h = dp(22.0);
         let w = ui.available_width();
+        let previous_group = self.watchlist_pane_group;
+        egui::ComboBox::from_id_salt("wl-group")
+            .selected_text(
+                self.watchlist_pane_group
+                    .and_then(|i| self.watchlist_groups.get(i).map(|group| group.name.as_str()))
+                    .unwrap_or("기존 관심종목"),
+            )
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.watchlist_pane_group, None, "기존 관심종목");
+                for (i, group) in self.watchlist_groups.iter().enumerate() {
+                    ui.selectable_value(
+                        &mut self.watchlist_pane_group,
+                        Some(i),
+                        format!("{} ({})", group.name, group.symbols.len()),
+                    );
+                }
+            });
+        if self.watchlist_pane_group != previous_group {
+            self.request_security_names(self.pane_watchlist_symbols().to_vec());
+            self.last_quotes = None;
+            self.last_technicals = None;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("SCREEN").font(mono(11.0)).color(amber()));
             egui::ComboBox::from_id_salt("wl-screen-mode").selected_text(self.screen.mode.label()).show_ui(ui, |ui| {
@@ -166,8 +188,9 @@ impl TerminalApp {
                 self.screen.max_age_minutes = if fresh { None } else { Some(30) };
             }
         });
+        let tracked = self.pane_watchlist_symbols().to_vec();
         let rows = crate::screening::screened_symbols(
-            &self.watchlist,
+            &tracked,
             &self.quotes,
             &self.technicals,
             &self.screen,
@@ -177,7 +200,7 @@ impl TerminalApp {
             RichText::new(format!(
                 "{} / {} tracked symbols · scan covers watchlist only · hover for source/time",
                 rows.len(),
-                self.watchlist.len()
+                tracked.len()
             ))
             .font(ui_font(10.5))
             .color(muted()),
@@ -343,7 +366,12 @@ impl TerminalApp {
             }
         });
         if let Some(s) = remove {
-            self.watchlist.retain(|x| *x != s);
+            if let Some(i) = self.watchlist_pane_group {
+                self.watchlist_groups[i].symbols.retain(|x| *x != s);
+            } else {
+                self.watchlist.retain(|x| *x != s);
+            }
+            self.save_settings();
         }
         if let Some((s, direction)) = create_alert {
             self.add_relative_price_alert(s, direction);

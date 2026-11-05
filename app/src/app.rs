@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use tr_chart::drawings::Tool;
 use tr_congress::Trade;
 use tr_congress::db::{Alert, PoliticianSummary};
+use tr_control::WatchlistGroup;
 use tr_data::{NewsItem, OrderBook, Quote, SearchHit, YieldCurves};
 use web_time::Instant;
 
@@ -388,6 +389,8 @@ struct Settings {
     #[serde(default)]
     watchlist: Option<Vec<String>>,
     #[serde(default)]
+    watchlist_groups: Vec<WatchlistGroup>,
+    #[serde(default)]
     screen: crate::screening::ScreenSettings,
     #[serde(default)]
     price_alerts: Vec<crate::screening::PriceAlert>,
@@ -533,6 +536,9 @@ pub struct TerminalApp {
     congress_checked: Option<chrono::DateTime<chrono::Local>>,
 
     watchlist: Vec<String>,
+    watchlist_groups: Vec<WatchlistGroup>,
+    watchlist_pane_group: Option<usize>,
+    quote_batch_cursor: usize,
     screen: crate::screening::ScreenSettings,
     price_alerts: Vec<crate::screening::PriceAlert>,
     technical_alerts: Vec<crate::screening::TechnicalAlert>,
@@ -695,6 +701,9 @@ impl TerminalApp {
             congress_status: String::new(),
             congress_checked: None,
             watchlist: DEFAULT_WATCHLIST.map(String::from).to_vec(),
+            watchlist_groups: Vec::new(),
+            watchlist_pane_group: None,
+            quote_batch_cursor: 0,
             screen: Default::default(),
             price_alerts: Vec::new(),
             technical_alerts: Vec::new(),
@@ -735,6 +744,7 @@ impl TerminalApp {
                 let mut seen = std::collections::HashSet::new();
                 app.watchlist.retain(|key| seen.insert(key.clone()));
             }
+            app.watchlist_groups = s.watchlist_groups.clone();
             app.screen = s.screen.clone();
             if !app.screen.min_move_pct.is_finite() {
                 app.screen.min_move_pct = 1.0;
@@ -790,6 +800,20 @@ impl TerminalApp {
         }
     }
 
+    fn pane_watchlist_symbols(&self) -> &[String] {
+        self.watchlist_pane_group
+            .and_then(|i| self.watchlist_groups.get(i))
+            .map_or(self.watchlist.as_slice(), |group| group.symbols.as_slice())
+    }
+
+    fn all_watchlist_symbol_count(&self) -> usize {
+        let mut unique: std::collections::HashSet<&str> = self.watchlist.iter().map(String::as_str).collect();
+        for group in &self.watchlist_groups {
+            unique.extend(group.symbols.iter().map(String::as_str));
+        }
+        unique.len()
+    }
+
     /// Show the frame-time readout (as F12 does); the browser's `?fps` flag.
     #[cfg(target_arch = "wasm32")]
     pub fn show_perf(&mut self) {
@@ -799,6 +823,7 @@ impl TerminalApp {
     fn save_settings(&self) {
         let s = Settings {
             watchlist: Some(self.watchlist.clone()),
+            watchlist_groups: self.watchlist_groups.clone(),
             screen: self.screen.clone(),
             price_alerts: self.price_alerts.clone(),
             technical_alerts: self.technical_alerts.clone(),
@@ -1482,9 +1507,35 @@ impl TerminalApp {
             || self.price_alerts.iter().any(|a| !a.triggered);
         if visible_wl && self.last_quotes.is_none_or(|t| t.elapsed() > Duration::from_secs(20)) {
             let mut keys = self.watchlist.clone();
-            keys.extend(self.price_alerts.iter().filter(|a| !a.triggered).map(|a| a.symbol.clone()));
+            if self.sidebar_open {
+                for group in self.watchlist_groups.iter().filter(|g| !g.collapsed) {
+                    keys.extend(group.symbols.iter().cloned());
+                }
+            }
+            if shown(&|k| matches!(k, PaneKind::Watchlist)) {
+                keys.extend(self.pane_watchlist_symbols().iter().cloned());
+            }
+            let mut alerts: Vec<String> =
+                self.price_alerts.iter().filter(|a| !a.triggered).map(|a| a.symbol.clone()).collect();
+            alerts.sort();
+            alerts.dedup();
             keys.sort();
             keys.dedup();
+            keys.retain(|key| !alerts.contains(key));
+            // A large imported Korean watchlist must not create hundreds of
+            // REST calls on every 20-second tick. Only visible groups are
+            // polled, in rotating batches when several groups are expanded.
+            const MAX_QUOTE_BATCH: usize = 40;
+            let available = MAX_QUOTE_BATCH.saturating_sub(alerts.len().min(MAX_QUOTE_BATCH));
+            if keys.len() > available {
+                let offset = self.quote_batch_cursor % keys.len();
+                keys.rotate_left(offset);
+                keys.truncate(available);
+                self.quote_batch_cursor = self.quote_batch_cursor.wrapping_add(available);
+            }
+            // Live alert symbols always have priority over opened group
+            // members; importing groups must not starve existing alerts.
+            keys.extend(alerts.into_iter().take(MAX_QUOTE_BATCH));
             if !keys.is_empty() {
                 self.worker.send(Request::Quotes(keys));
             }
@@ -1494,7 +1545,8 @@ impl TerminalApp {
         if (technical_scan || self.technical_alerts.iter().any(|a| !a.triggered))
             && self.last_technicals.is_none_or(|t| t.elapsed() > Duration::from_secs(300))
         {
-            let mut keys: Vec<String> = if technical_scan { self.watchlist.clone() } else { Vec::new() };
+            let mut keys: Vec<String> =
+                if technical_scan { self.pane_watchlist_symbols().to_vec() } else { Vec::new() };
             keys.extend(self.technical_alerts.iter().filter(|a| !a.triggered).map(|a| a.symbol.clone()));
             keys.sort();
             keys.dedup();

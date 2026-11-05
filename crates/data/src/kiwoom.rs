@@ -42,8 +42,14 @@ pub fn domestic_index(symbol: &str) -> Option<&'static str> {
 
 pub fn domestic_stock_code(symbol: &str) -> Option<&str> {
     let upper = symbol.to_ascii_uppercase();
-    let code = upper.strip_suffix(".KS").or_else(|| upper.strip_suffix(".KQ")).unwrap_or(&upper);
-    if code.len() == 6 && code.bytes().all(|c| c.is_ascii_digit()) {
+    let qualified = upper.strip_suffix(".KS").or_else(|| upper.strip_suffix(".KQ"));
+    let code = qualified.unwrap_or(&upper);
+    if code.len() == 6 && code.bytes().all(|c| c.is_ascii_digit())
+        || qualified.is_some()
+            && code.len() == 6
+            && code.bytes().all(|c| c.is_ascii_alphanumeric())
+            && code.bytes().any(|c| c.is_ascii_digit())
+    {
         // Return a slice of the original string, preserving its byte boundaries.
         Some(&symbol[..6])
     } else {
@@ -283,7 +289,7 @@ impl KiwoomProvider {
                                 let (Some(code), Some(name)) = (item["code"].as_str(), item["name"].as_str()) else {
                                     continue;
                                 };
-                                if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+                                if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
                                     continue;
                                 }
                                 all.push(SearchHit {
@@ -502,8 +508,19 @@ mod tests {
 
     #[test]
     fn routes_only_korean_instruments() {
-        for s in ["005930.KS", "035720.KQ", "005930", "KOSPI Index", "KOSDAQ Index", "KOSPI200 Index", "^KS11", "^KQ11"]
-        {
+        for s in [
+            "005930.KS",
+            "035720.KQ",
+            "005930",
+            "00088K.KS",
+            "0048K0.KS",
+            "0038A0.KS",
+            "KOSPI Index",
+            "KOSDAQ Index",
+            "KOSPI200 Index",
+            "^KS11",
+            "^KQ11",
+        ] {
             assert!(is_domestic(&crate::security(s)), "{s}");
         }
         for s in ["AAPL US Equity", "SPX Index", "BTCUSD Curncy", "USDJPY Curncy", "GC1 Comdty", "xyz:KR200"] {

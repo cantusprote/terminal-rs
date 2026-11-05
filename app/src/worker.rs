@@ -796,7 +796,7 @@ async fn handle(s: &Arc<Shared>, req: Request) {
             for key in keys {
                 let sec = tr_data::security(&key);
                 let ticker = sec.ticker.trim_end_matches(".KS").trim_end_matches(".KQ");
-                if ticker.len() != 6 || !ticker.bytes().all(|b| b.is_ascii_digit()) {
+                if ticker.len() != 6 || !ticker.bytes().all(|b| b.is_ascii_alphanumeric()) {
                     continue;
                 }
                 if let Ok(hits) = s.provider.search(ticker).await
