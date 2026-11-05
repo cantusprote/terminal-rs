@@ -881,7 +881,13 @@ impl TerminalApp {
             let mut p = layer.clone();
             p.multiply_opacity(1.0 - leave);
             widgets::card_on(&p, r, 0.0);
-            let (title, msg, color) = ("Congress Alert", msg.as_str(), amber());
+            let (title, msg, color) = match msg.strip_prefix("Price alert: ") {
+                Some(rest) => ("Price Alert", rest, amber()),
+                None => match msg.strip_prefix("Technical alert: ") {
+                    Some(rest) => ("Technical Alert", rest, amber()),
+                    None => ("Congress Alert", msg.as_str(), amber()),
+                },
+            };
             p.rect_filled(Rect::from_min_size(r.min + vec2(1.0, 6.0), vec2(3.0, r.height() - 12.0)), 1.5, color);
             widgets::draw_icon(
                 &p,
@@ -958,13 +964,13 @@ fn source_chip(provider: &str) -> (&'static str, bool) {
     if n == "sample" {
         ("Offline", false)
     } else if n.contains("apple-stocks-cache") {
-        ("Stocks cached", true)
+        ("Stocks cached", false)
     } else if n.contains("sample") && n.starts_with("server+") {
         ("Crypto + perps live", true)
     } else if n.contains("sample") {
         ("Crypto live", true)
     } else {
-        ("Live", true)
+        ("Market feeds", true)
     }
 }
 
@@ -974,7 +980,7 @@ fn provider_label(provider: &str) -> String {
         "Offline · sample data".into()
     } else if n.contains("apple-stocks-cache") {
         format!(
-            "Apple Stocks read-only local cache (quotes may be delayed and only update when Stocks fetches data); missing/stale records use {provider}"
+            "Apple Stocks cache opens requested symbols; source and observation time are shown per quote. Data may be delayed; other providers supply missing/stale symbols: {provider}"
         )
     } else if let Some(rest) = provider.strip_prefix("server+") {
         // A Terminal server (tr_data::remote::RemoteMarkets), in front of the browser's sources
@@ -1012,16 +1018,16 @@ mod tests {
         assert!(desktop.contains("Terminal server") && desktop.ends_with("other markets from markets"), "{desktop}");
         assert!(web.contains("HIP-3 perps") && desktop.contains("HIP-3 perps"), "{web} / {desktop}");
         let apple = provider_label("apple-stocks-cache+yahoo+binance+ust");
-        assert!(apple.contains("may be delayed") && apple.contains("read-only"));
+        assert!(apple.contains("may be delayed") && apple.contains("source"));
     }
 
     /// With a server in front, the browser build has live perps as well as crypto.
     #[test]
     fn the_source_chip_says_what_is_live() {
         assert_eq!(source_chip("sample"), ("Offline", false));
-        assert_eq!(source_chip("apple-stocks-cache+yahoo+binance+ust"), ("Stocks cached", true));
+        assert_eq!(source_chip("apple-stocks-cache+yahoo+binance+ust"), ("Stocks cached", false));
         assert_eq!(source_chip("binance+sample"), ("Crypto live", true));
         assert_eq!(source_chip("server+binance+sample"), ("Crypto + perps live", true));
-        assert_eq!(source_chip("server+yahoo+binance+ust"), ("Live", true));
+        assert_eq!(source_chip("server+yahoo+binance+ust"), ("Market feeds", true));
     }
 }

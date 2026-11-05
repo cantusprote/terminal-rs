@@ -92,7 +92,10 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
 
   No keys are required. `TR_PROVIDER=sample` runs fully offline on deterministic, class-aware sample
   data (BTCUSD near 65,000, EURUSD near 1.09, US10Y near 4.2%) **with simulated live ticks**, and
-  the live router falls back to sample data when a source is unreachable. Bars are cached in SQLite
+  the live router **never fabricates sample prices on a source failure**. For isolated UI
+  demonstrations, `TR_SAMPLE_FALLBACK=1` explicitly enables the legacy synthetic fallback.
+  Quotes show per-symbol source, original observation time and delay warnings on hover.
+  Bars are cached in SQLite
   so charts paint from disk on start. Older history pages in as you scroll left.
 - **Congress trades** (key feature)
   - Ingests Periodic Transaction Reports from the **Senate eFD** (efdsearch.senate.gov: agreement
@@ -163,6 +166,21 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
   trade cancellation, paper-trading engine, trading mode, or Turnkey wallet integration.
   The toolbar identifies the terminal as **READ ONLY**; historic brokerage
   transactions can still be inspected but never modified from the terminal.
+- **Local screening and alerts** — `SCAN UP 2`, `SCAN DOWN 2`,
+  `SCAN MOVE 3`, `SCAN SORT GAINERS`, `SCAN FRESH 10` filter the
+  **current watchlist only**. `SCAN VOL 2` detects latest daily volume ≥2×
+  the previous 20 daily candles' average; `SCAN SMA ABOVE/BELOW` compares
+  close to SMA20, and `SCAN RSI HIGH/LOW` filters RSI14 ≥70/≤30.
+  The Watchlist panel also offers sorting, freshness and technical controls.
+  `PRICEALERT AAPL ABOVE 210` and `PRICEALERT 005930.KS BELOW 70000`
+  notify once on a new observed price crossing. `TECHALERT AAPL VOL 2`,
+  `TECHALERT AAPL RSI ABOVE 70`, and `TECHALERT AAPL SMA BELOW` add
+  one-shot **daily-candle technical** alerts. Technical history is fetched at
+  most every 5 minutes while the watchlist/alerts are active (up to 40 tracked
+  symbols). `PRICEALERT LIST/CLEAR` and `TECHALERT LIST/CLEAR` inspect or
+  remove them. **The latest daily candle may be incomplete; its volume ratio
+  is not final-day volume.** All alerts require Terminal to be running, use
+  observations that may be delayed and never submit orders.
 - **Command palette** — ⌘K (Ctrl+K on Linux and Windows) opens a centred, theme-matched palette
   that fuzzy-searches every function code (`PORT`, `POS`, `ORD`, `OMON`, `THEME`, …), tickers
   (load the quote and chart), new panels, layout presets and saved layouts, themes, Settings tabs
@@ -181,6 +199,18 @@ APCA_API_KEY_ID=… APCA_API_SECRET_KEY=… cargo run --release   # Alpaca
 TR_APPLE_STOCKS_CACHE=1 cargo run --release   # macOS: open missing tickers in Stocks, read fresh cache, then Yahoo fallback
 ```
 
+**Personal use:** the independent `cantusprote/terminal-rs` project is
+maintained for local MacBook/Mac Studio use, **not for public distribution**.
+The macOS bundle is for copying between personal computers. No auto-update
+client or external release feed runs in the app. `UPDATE` shows local
+`git pull --ff-only origin master` / rebuild instructions, not a public
+release page. No trading or wallet execution exists.
+
+```sh
+cargo build -p terminal
+scripts/bundle-macos.sh target/debug/terminal
+```
+
 Data lives in `~/Library/Application Support/terminal` (macOS) or
 `$XDG_DATA_HOME/terminal` (Linux), or `TR_DATA_DIR`. Versions from before the project was renamed
 used a `terminal-rs` folder in the same place; the first launch moves it to `terminal` and leaves
@@ -192,16 +222,9 @@ while you work).
 Appearance: `TR_THEME=light|dark|<theme name>` overrides the saved theme, `TR_MSAA=1|2|4|8` sets
 chart anti-aliasing (default 4 on macOS), `TR_VIBRANCY=0` disables the translucent sidebar, and
 ⌃⌘S (Ctrl+Shift+S elsewhere) toggles the sidebar. `scripts/bundle-macos.sh` builds a retina-capable
-`Terminal.app` (icon from `scripts/build-icon.sh`); `scripts/release-macos.sh` builds the universal (Apple Silicon + Intel) app,
-signs it with a Developer ID certificate, notarizes it and packages `Terminal.dmg`,
-plus the zip and signed `appcast.xml` for independent releases (one-time credential
-setup is at the top of the script). The private fork is maintained separately:
-**bundles do not include automatic updates by default**, so they cannot install
-updates signed by the original author's key. To enable automatic updates,
-create a new [Sparkle](https://sparkle-project.org) signing key and supply its
-public half as `TR_SPARKLE_PUBLIC_KEY` when bundling and releasing; the feed
-points only to `cantusprote/terminal-rs`. Until then, Terminal › Check for
-Updates… or `UPDATE` opens the independent repository's Releases page.
+`Terminal.app` (icon from `scripts/build-icon.sh`). Public signing,
+notarization, DMG distribution and Sparkle updates are not part of the
+personal-workstation workflow.
 `scripts/check-macos-cross.sh` compiles
 and lints the whole workspace for aarch64-apple-darwin from Linux (zig as the C cross-compiler;
 linking needs the macOS SDK).

@@ -21,7 +21,13 @@ async fn main() -> anyhow::Result<()> {
         let quotes = router.quotes(std::slice::from_ref(&key)).await?;
         let quote = quotes.iter().find(|q| q.symbol == key).ok_or_else(|| anyhow::anyhow!("no price for {key}"))?;
         let apple = cache.quotes(&[(key, symbol.clone())])?;
-        println!("router last={} timestamp={} Apple cache available={}", quote.last, quote.ts, !apple.is_empty());
+        println!(
+            "router last={} observed_at={} source={} Apple cache available={}",
+            quote.last,
+            quote.ts,
+            quote.source.as_deref().unwrap_or("unknown"),
+            !apple.is_empty()
+        );
         return Ok(());
     }
     let keys = vec![

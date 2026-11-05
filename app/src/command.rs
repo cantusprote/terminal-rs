@@ -155,6 +155,12 @@ pub enum Function {
     Watchlist,
     WatchAdd(Vec<String>),
     WatchRemove(Vec<String>),
+    /// Screen the currently tracked watchlist without requesting new assets.
+    Screen(String),
+    /// Local one-shot price crossing alert; never sends an order.
+    PriceAlert(String),
+    /// Local daily-bar technical alert; no brokerage interaction.
+    TechnicalAlert(String),
     /// `LAYOUT 1|2|2H|3|4|6` preset, `LAYOUT <name>` switch, or a layout subcommand
     /// (`SAVE`, `SAVEAS`, `NEW`, `RENAME`, `DUP`, `DEL`, `EXPORT`, `IMPORT`).
     Layout(String),
@@ -179,7 +185,7 @@ pub enum Function {
     /// `SIDEBAR LEFT|RIGHT|TOGGLE|SHOW|HIDE|SWAP`.
     Sidebar(String),
     Settings,
-    /// Check for a newer release of the app.
+    /// Explain how to refresh a locally built personal app.
     Update,
     /// `THEME LIGHT|DARK|SYSTEM|COMPACT|REGULAR|COMFORTABLE`.
     Theme(String),
@@ -242,6 +248,9 @@ fn parse_function(head: &str, rest: &[&str]) -> Option<Function> {
             Some("DEL") | Some("RM") | Some("REMOVE") => Function::WatchRemove(words()[1..].to_vec()),
             _ => Function::Watchlist,
         },
+        "SCAN" | "SCREENER" => Function::Screen(joined()),
+        "PRICEALERT" | "PXALERT" => Function::PriceAlert(joined()),
+        "TECHALERT" | "TALERT" => Function::TechnicalAlert(joined()),
         "LAYOUT" | "GRID" | "LP" => Function::Layout(joined()),
         "LAYOUTS" => Function::Layouts,
         "NEW" | "ADD" => Function::NewPanel(joined()),
@@ -386,6 +395,15 @@ fn describe(f: &Function) -> String {
         Function::Watchlist => "Watchlist".into(),
         Function::WatchAdd(s) => format!("Add {} to watchlist", s.join(", ")),
         Function::WatchRemove(s) => format!("Remove {} from watchlist", s.join(", ")),
+        Function::Screen(s) => format!("Screen the watchlist: {}", if s.is_empty() { "current filter" } else { s }),
+        Function::PriceAlert(s) => format!(
+            "One-shot price crossing alert: {}",
+            if s.is_empty() { "LIST / CLEAR / SYMBOL ABOVE|BELOW PRICE" } else { s }
+        ),
+        Function::TechnicalAlert(s) => format!(
+            "Daily SMA20, RSI14 or volume alert: {}",
+            if s.is_empty() { "LIST / CLEAR / SYMBOL VOL|RSI|SMA" } else { s }
+        ),
         Function::Layout(l) if l.trim().is_empty() => "Saved layouts".into(),
         Function::Layout(l) => format!("Layout {l}"),
         Function::Layouts => "Saved layouts".into(),
@@ -407,7 +425,7 @@ fn describe(f: &Function) -> String {
         Function::Sidebar(s) if s.is_empty() => "Toggle the sidebar".into(),
         Function::Sidebar(s) => format!("Sidebar {}", s.to_lowercase()),
         Function::Settings => "Settings: theme, fonts, density, hotkeys, panels, layouts".into(),
-        Function::Update => "Check for updates".into(),
+        Function::Update => "Update personal source from GitHub and rebuild locally".into(),
         Function::Theme(t) => format!("Theme {t}"),
         Function::Title(t) => format!("Rename tab to {t:?}"),
         Function::ClosePane => "Close focused pane".into(),

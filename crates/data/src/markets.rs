@@ -34,6 +34,11 @@ pub struct Markets {
     name: String,
 }
 
+#[cfg(target_os = "macos")]
+fn apple_supports(class: AssetClass) -> bool {
+    matches!(class, AssetClass::Equity | AssetClass::Etf | AssetClass::Index)
+}
+
 impl Markets {
     pub fn new(alpaca: Option<AlpacaProvider>) -> Result<Self> {
         let name = if alpaca.is_some() { "alpaca+yahoo+binance+ust" } else { "yahoo+binance+ust" }.to_string();
@@ -67,7 +72,7 @@ impl MarketData for Markets {
         // primes its local quote cache for the subsequent quote requests.
         #[cfg(target_os = "macos")]
         if end.is_none()
-            && !matches!(sec.class, AssetClass::Crypto | AssetClass::Govt | AssetClass::Perp)
+            && apple_supports(sec.class)
             && let Some(cache) = &self.apple
         {
             let native = yahoo_symbol(&sec);
@@ -98,7 +103,7 @@ impl MarketData for Markets {
         // full historical source; never use it for older-history paging.
         #[cfg(target_os = "macos")]
         if end.is_none()
-            && !matches!(sec.class, AssetClass::Crypto | AssetClass::Govt | AssetClass::Perp)
+            && apple_supports(sec.class)
             && let Some(cache) = &self.apple
         {
             match cache.history(&yahoo_symbol(&sec), tf) {
@@ -151,8 +156,11 @@ impl MarketData for Markets {
         let apple_quotes: Vec<Quote> = Vec::new();
         #[cfg(target_os = "macos")]
         if let Some(cache) = &self.apple {
-            let pairs: Vec<(String, String)> =
-                other.iter().map(|(key, sec)| (key.clone(), yahoo_symbol(sec))).collect();
+            let pairs: Vec<(String, String)> = other
+                .iter()
+                .filter(|(_, sec)| apple_supports(sec.class))
+                .map(|(key, sec)| (key.clone(), yahoo_symbol(sec)))
+                .collect();
             match cache.quotes(&pairs) {
                 Ok(quotes) => apple_quotes = quotes,
                 Err(e) => tracing::warn!("Apple Stocks cache unavailable: {e:#}"),

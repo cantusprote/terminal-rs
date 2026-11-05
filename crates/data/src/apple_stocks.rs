@@ -1,7 +1,8 @@
 //! Read-only bridge to the *local* macOS Stocks app's SQLite market-data cache.
 //!
 //! This is not a StocksKit API client: it never uses private service methods,
-//! sessions or credentials. Only already-cached symbols can be read. The cache
+//! sessions or credentials. New symbols can be opened through the registered
+//! `stocks://` URL, after which the ordinary local cache is polled. The cache
 //! format is private and may change in future macOS releases.
 
 use std::collections::HashMap;
@@ -31,6 +32,9 @@ const REFRESH_POLL: Duration = Duration::from_millis(200);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 const RETRY_COOLDOWN: Duration = Duration::from_secs(120);
 const OPEN_SPACING: Duration = Duration::from_millis(1_000);
+/// Opening dozens of symbols in Stocks would disrupt the user's own Stocks
+/// browsing. Other cache misses fall back to Yahoo immediately.
+const MAX_REFRESH_PER_BATCH: usize = 3;
 
 #[derive(Debug, Default)]
 struct RefreshGate {
@@ -49,6 +53,9 @@ enum RefreshPlan {
 pub struct AppleStocksCache {
     cache_dir: PathBuf,
     refresh_gate: Arc<Mutex<RefreshGate>>,
+    /// Stocks uses one selected-symbol view. Concurrent deep links would
+    /// interrupt each other, so only one quote-loading batch may navigate.
+    navigation: Arc<Mutex<()>>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +70,7 @@ struct StoredQuote {
     price_change: f64,
     date_last_refreshed: Option<f64>,
     exchange_status: Option<String>,
+    price_source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -101,19 +109,42 @@ impl AppleStocksCache {
     }
 
     pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
-        Self { cache_dir: cache_dir.into(), refresh_gate: Arc::new(Mutex::new(RefreshGate::default())) }
+        Self {
+            cache_dir: cache_dir.into(),
+            refresh_gate: Arc::new(Mutex::new(RefreshGate::default())),
+            navigation: Arc::new(Mutex::new(())),
+        }
     }
 
     /// Opens Apple's own symbol view via its registered deep link and then
     /// waits briefly for StocksKit to fill the ordinary local quote cache.
     /// This does not call any private API or access any session token.
     ///
-    /// At most one symbol is opened per batch; an in-flight request for the
-    /// same symbol is coalesced and unsuccessful symbols are rate-limited.
+    /// At most three missing symbols are opened per batch; an in-flight
+    /// request for the same symbol is coalesced and attempts are rate-limited.
     /// Missing results are returned to the caller to route to Yahoo.
     pub async fn refresh_missing_quotes(&self, pairs: &[(String, String)]) -> Vec<Quote> {
+        // Keep the normal provider fallback responsive while another history
+        // or watchlist request navigates the Stocks application.
+        let Ok(_navigation) = self.navigation.try_lock() else {
+            return Vec::new();
+        };
+        let mut refreshed = Vec::new();
+        let mut attempted = 0;
         for (key, native) in pairs {
+            if attempted >= MAX_REFRESH_PER_BATCH {
+                break;
+            }
             let Some(url) = symbol_deep_link(native) else { continue };
+            // Allow a serial batch to open each symbol without interrupting
+            // Stocks immediately after it began loading the previous one.
+            let delay = {
+                let state = self.refresh_gate.lock().await;
+                state.last_open.map(|t| OPEN_SPACING.saturating_sub(t.elapsed())).unwrap_or_default()
+            };
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             let plan = {
                 let mut state = self.refresh_gate.lock().await;
                 refresh_plan(&mut state, native, Instant::now())
@@ -121,6 +152,7 @@ impl AppleStocksCache {
             if plan == RefreshPlan::Skip {
                 continue;
             }
+            attempted += 1;
             if plan == RefreshPlan::Launch {
                 let launched = tokio::task::spawn_blocking(move || {
                     Command::new("/usr/bin/open")
@@ -148,16 +180,16 @@ impl AppleStocksCache {
                     && !q.is_empty()
                 {
                     tracing::debug!("Apple Stocks cache refreshed for {native}");
-                    return q;
+                    refreshed.extend(q);
+                    break;
                 }
                 tokio::time::sleep(REFRESH_POLL).await;
             }
-            tracing::debug!("Apple Stocks cache did not refresh for {native}; falling back to standard source");
-            // Avoid opening other stock symbols in this same batch; the Stocks
-            // app navigates to a new symbol when a second deep link arrives.
-            break;
+            if !refreshed.iter().any(|q| q.symbol == *key) {
+                tracing::debug!("Apple Stocks cache did not refresh for {native}; falling back to standard source");
+            }
         }
-        Vec::new()
+        refreshed
     }
 
     fn open(&self, file: &str) -> Result<Connection> {
@@ -250,7 +282,8 @@ fn refresh_plan(state: &mut RefreshGate, symbol: &str, now: Instant) -> RefreshP
 }
 
 fn parse_quote(symbol: &str, updated_at: f64, s: StoredQuote, now: f64) -> Option<Quote> {
-    let max_age = if s.exchange_status.as_deref() == Some("open") { OPEN_MAX_AGE } else { CLOSED_MAX_AGE };
+    let delayed = s.price_source.as_ref().is_some_and(|source| source.to_ascii_lowercase().contains("delayed"));
+    let max_age = if s.exchange_status.as_deref() == Some("open") && !delayed { OPEN_MAX_AGE } else { CLOSED_MAX_AGE };
     if !AppleStocksCache::fresh(updated_at, max_age, now) || !s.price.is_finite() || s.price <= 0.0 {
         return None;
     }
@@ -262,7 +295,19 @@ fn parse_quote(symbol: &str, updated_at: f64, s: StoredQuote, now: f64) -> Optio
     if !stamp.is_finite() || stamp < 0.0 || stamp > now + 120.0 {
         return None;
     }
-    Some(Quote { symbol: symbol.to_string(), last: s.price, prev_close, ts: stamp as i64, spark: vec![] })
+    // Some SQLite rows were touched recently but still contain an older
+    // exchange quote. Timestamp validity must use the actual observation.
+    if !AppleStocksCache::fresh(stamp, max_age, now) {
+        return None;
+    }
+    Some(Quote {
+        symbol: symbol.to_string(),
+        last: s.price,
+        prev_close,
+        ts: stamp as i64,
+        spark: vec![],
+        source: Some(if delayed { "Apple Stocks (delayed)" } else { "Apple Stocks" }.into()),
+    })
 }
 
 fn parse_sparkline(mut entries: Vec<StoredBar>, tf: Timeframe) -> Vec<Bar> {
@@ -329,6 +374,47 @@ mod tests {
         )
         .unwrap();
         assert!(parse_quote("AAPL", 1_793_845_319.0, q.v, 1_793_846_000.0).is_none());
+    }
+
+    #[test]
+    fn updated_sqlite_row_does_not_make_old_market_observation_fresh() {
+        let now = 1_793_846_000.0;
+        let old_market_stamp = now - 7_200.0 - APPLE_EPOCH_OFFSET;
+        let q: Envelope<StoredQuote> = serde_json::from_value(serde_json::json!({
+            "v": {"price": 230.0, "priceChange": 5.0, "dateLastRefreshed": old_market_stamp,
+                  "exchangeStatus": "open", "priceSource": "nasdaqRealtime"}
+        }))
+        .unwrap();
+        assert!(parse_quote("AAPL", now - 5.0, q.v, now).is_none());
+    }
+
+    #[test]
+    fn delayed_exchange_quotes_are_labeled_and_bounded() {
+        let now = 1_793_846_000.0;
+        let q: Envelope<StoredQuote> = serde_json::from_value(serde_json::json!({
+            "v": {"price": 15000.0, "priceChange": -200.0,
+                  "dateLastRefreshed": now - 1_200.0 - APPLE_EPOCH_OFFSET,
+                  "exchangeStatus": "open", "priceSource": "genericDelayed"}
+        }))
+        .unwrap();
+        let got = parse_quote("005930.KS US Equity", now - 2.0, q.v, now).unwrap();
+        assert_eq!(got.source.as_deref(), Some("Apple Stocks (delayed)"));
+        assert_eq!(got.ts, now as i64 - 1_200);
+    }
+
+    #[test]
+    fn refresh_batch_size_is_bounded_to_avoid_rapid_stocks_navigation() {
+        assert!((2..=4).contains(&MAX_REFRESH_PER_BATCH));
+    }
+
+    #[tokio::test]
+    async fn simultaneous_refreshes_do_not_navigate_stocks_again() {
+        let cache = AppleStocksCache::new("/nonexistent-apple-stocks-cache");
+        let locked = cache.navigation.lock().await;
+        let result = cache.refresh_missing_quotes(&[("AAPL US Equity".into(), "AAPL".into())]).await;
+        assert!(result.is_empty(), "a busy Stocks symbol view must not receive a second deep link");
+        drop(locked);
+        assert!(cache.navigation.try_lock().is_ok());
     }
 
     #[test]

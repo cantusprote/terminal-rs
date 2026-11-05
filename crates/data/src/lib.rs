@@ -9,8 +9,9 @@
 //!   Treasury yields, Yahoo Finance for FX, indices, futures, ETFs and stocks, or Alpaca for
 //!   US stocks/ETFs when `APCA_API_KEY_ID` + `APCA_API_SECRET_KEY` are set.
 //!
-//! The router is wrapped in [`Fallback`], which serves sample data if a source is
-//! unreachable, so the terminal always has something to draw.
+//! Live mode never invents prices on network errors. `TR_PROVIDER=sample`
+//! explicitly selects synthetic offline data. Old sample fallback is available
+//! only via `TR_SAMPLE_FALLBACK=1` for controlled UI demonstrations.
 //!
 //! `TR_SERVER_URL` (`ws://` or `wss://`) opts in to the Terminal data server
 //! ([`remote::RemoteMarkets`]): crypto markets then come from Hyperliquid perps through the
@@ -63,6 +64,10 @@ pub struct Quote {
     /// Recent daily closes (oldest first) for sparklines; may be empty.
     #[serde(default)]
     pub spark: Vec<f64>,
+    /// Actual source of this specific observation, not the global provider
+    /// chain. Old cached quotes deserialize as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// A symbol-search result.
@@ -258,7 +263,14 @@ pub trait MarketData: Send + Sync {
             let bars = self.history(s, Timeframe::D1, None, 2).await?;
             if let Some(last) = bars.last() {
                 let prev = if bars.len() > 1 { bars[bars.len() - 2].close } else { last.open };
-                out.push(Quote { symbol: s.clone(), last: last.close, prev_close: prev, ts: last.ts, spark: vec![] });
+                out.push(Quote {
+                    symbol: s.clone(),
+                    last: last.close,
+                    prev_close: prev,
+                    ts: last.ts,
+                    spark: vec![],
+                    source: Some(self.name().into()),
+                });
             }
         }
         Ok(out)
@@ -334,6 +346,23 @@ pub struct Fallback<P> {
     primary: P,
     sample: sample::SampleProvider,
     name: String,
+}
+
+/// Explicitly unusable market-data source. Live initialization must never
+/// quietly turn into synthetic portfolio/market prices.
+struct Unavailable {
+    reason: String,
+}
+
+#[async_trait]
+impl MarketData for Unavailable {
+    fn name(&self) -> &str {
+        "unavailable (no simulated prices)"
+    }
+
+    async fn history(&self, _symbol: &str, _tf: Timeframe, _end: Option<i64>, _limit: usize) -> Result<Vec<Bar>> {
+        anyhow::bail!("{}", self.reason)
+    }
 }
 
 impl<P: MarketData> Fallback<P> {
@@ -471,18 +500,21 @@ pub fn from_env() -> Provider {
     };
     let markets = match markets::Markets::new(alpaca) {
         Ok(m) => m,
-        Err(_) => return Arc::new(sample::SampleProvider::default().with_live_ticks()),
+        Err(e) => {
+            tracing::error!("market-data initialization failed; refusing fabricated quotes: {e:#}");
+            return Arc::new(Unavailable { reason: format!("market-data initialization failed: {e:#}") });
+        }
     };
-    // When Apple Stocks is explicitly enabled, the caller requested the real
-    // Apple → Yahoo/Alpaca chain. Do not insert fabricated sample prices after
-    // both sources fail; the opt-in offline sample provider remains available.
-    if markets.name().starts_with("apple-stocks-cache+") {
+    // Real and synthetic prices must never be confused. A user who wants
+    // sample data must opt into it; failed network calls remain missing.
+    let sample_fallback = var("TR_SAMPLE_FALLBACK").is_some_and(|v| matches!(v.as_str(), "1" | "true"));
+    if sample_fallback {
+        let provider = Fallback::new(markets);
         return match var("TR_SERVER_URL") {
-            Some(url) => Arc::new(remote::RemoteMarkets::new(url.trim(), markets)),
-            None => Arc::new(markets),
+            Some(url) => Arc::new(remote::RemoteMarkets::new(url.trim(), provider)),
+            None => Arc::new(provider),
         };
     }
-    let markets = Fallback::new(markets);
     match var("TR_SERVER_URL") {
         Some(url) => {
             // The URL itself stays out of the logs.
@@ -526,6 +558,14 @@ pub(crate) fn clip(mut bars: Vec<Bar>, end: Option<i64>, limit: usize) -> Vec<Ba
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn broken_live_market_source_never_falls_back_to_sample_prices() {
+        let unavailable = Unavailable { reason: "the network configuration is unavailable".into() };
+        assert!(unavailable.history("AAPL", Timeframe::D1, None, 30).await.is_err());
+        assert!(unavailable.quotes(&["AAPL US Equity".into()]).await.is_err());
+        assert!(!unavailable.name().contains("sample"));
+    }
 
     #[test]
     fn grouping_and_simulated_books() {
@@ -582,6 +622,16 @@ mod tests {
         assert_eq!(p.name(), "broken");
     }
 
+    #[test]
+    fn quote_source_is_backwards_compatible_with_old_cached_json() {
+        let old = r#"{"symbol":"AAPL US Equity","last":220.0,"prev_close":219.0,"ts":123,"spark":[]}"#;
+        let q: Quote = serde_json::from_str(old).unwrap();
+        assert_eq!(q.source, None);
+        let enriched = Quote { source: Some("Apple Stocks".into()), ..q };
+        let result: Quote = serde_json::from_str(&serde_json::to_string(&enriched).unwrap()).unwrap();
+        assert_eq!(result.source.as_deref(), Some("Apple Stocks"));
+    }
+
     /// A HIP-3 perp has no source but the Terminal server, so nothing stands in for it: no
     /// sample bars, quotes or books when a source fails, and none in offline sample mode.
     #[tokio::test]
@@ -629,7 +679,7 @@ mod tests {
 
     #[test]
     fn quote_change() {
-        let q = Quote { symbol: "X".into(), last: 110.0, prev_close: 100.0, ts: 0, spark: vec![] };
+        let q = Quote { symbol: "X".into(), last: 110.0, prev_close: 100.0, ts: 0, spark: vec![], source: None };
         assert_eq!(q.change(), 10.0);
         assert!((q.change_pct() - 10.0).abs() < 1e-9);
     }

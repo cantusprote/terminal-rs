@@ -818,8 +818,14 @@ mod tests {
 
     #[test]
     fn readonly_position_uses_market_quotes_only() {
-        let quote =
-            |last: f64| tr_data::Quote { symbol: "xyz:AAPL".into(), last, prev_close: last, ts: 0, spark: Vec::new() };
+        let quote = |last: f64| tr_data::Quote {
+            symbol: "xyz:AAPL".into(),
+            last,
+            prev_close: last,
+            ts: 0,
+            spark: Vec::new(),
+            source: None,
+        };
         let row = |account: &str| Position {
             account_id: account.into(),
             symbol: "xyz:AAPL".into(),

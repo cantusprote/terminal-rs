@@ -26,6 +26,34 @@ pub fn change_text(sec: &Security, q: &Quote) -> String {
     }
 }
 
+/// Observation provenance is per symbol: an Apple-cache quote does not imply
+/// that other rows came from Apple, and a recently returned API response does
+/// not mean the *market observation* was recent.
+pub fn quote_context(q: &Quote, now: i64) -> String {
+    let source = q.source.as_deref().unwrap_or("Unknown source");
+    if q.ts <= 0 {
+        return format!("{source}\nMarket observation time unavailable");
+    }
+    let when = chrono::DateTime::<chrono::Utc>::from_timestamp(q.ts, 0)
+        .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S %Z").to_string())
+        .unwrap_or_else(|| "Invalid timestamp".into());
+    let ago = if q.ts > now + 120 {
+        "Observation time is ahead of system clock".to_string()
+    } else {
+        let minutes = (now - q.ts).max(0) / 60;
+        if minutes < 1 {
+            "under a minute ago".into()
+        } else if minutes < 60 {
+            format!("{minutes} min ago")
+        } else if minutes < 1440 {
+            format!("{} h ago", minutes / 60)
+        } else {
+            format!("{} d ago", minutes / 1440)
+        }
+    };
+    format!("{source}\nObserved {when} ({ago})\nPrices may be delayed; check exchange session")
+}
+
 fn sparkline(ui: &Ui, rect: Rect, values: &[f64], color: Color32) {
     let v: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
     if v.len() < 2 {
@@ -52,6 +80,10 @@ fn row(ui: &mut Ui, l: &Listing, quotes: &HashMap<String, Quote>, out: &mut Vec<
     let q = quotes.get(&key);
     let h = theme::dp(16.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, h), Sense::click());
+    let resp = match q {
+        Some(q) => resp.on_hover_text(quote_context(q, chrono::Utc::now().timestamp())),
+        None => resp,
+    };
     if resp.hovered() {
         ui.painter().rect_filled(rect, 3.0, theme::control());
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -363,10 +395,35 @@ mod tests {
 
     #[test]
     fn change_formatting() {
-        let q = Quote { symbol: "US10Y Govt".into(), last: 4.25, prev_close: 4.22, ts: 0, spark: vec![] };
+        let q = Quote { symbol: "US10Y Govt".into(), last: 4.25, prev_close: 4.22, ts: 0, spark: vec![], source: None };
         assert_eq!(change_text(&Security::parse("US10Y Govt").unwrap(), &q), "+3.0bp");
-        let q = Quote { symbol: "EURUSD Curncy".into(), last: 1.0912, prev_close: 1.0900, ts: 0, spark: vec![] };
+        let q = Quote {
+            symbol: "EURUSD Curncy".into(),
+            last: 1.0912,
+            prev_close: 1.0900,
+            ts: 0,
+            spark: vec![],
+            source: None,
+        };
         assert_eq!(change_text(&Security::parse("EURUSD Curncy").unwrap(), &q), "+0.0012");
+    }
+
+    #[test]
+    fn provenance_reports_the_actual_market_observation_not_poll_time() {
+        let q = Quote {
+            symbol: "AAPL US Equity".into(),
+            last: 220.0,
+            prev_close: 210.0,
+            ts: 1000,
+            spark: Vec::new(),
+            source: Some("Apple Stocks (delayed)".into()),
+        };
+        let info = quote_context(&q, 2200);
+        assert!(info.contains("Apple Stocks (delayed)"));
+        assert!(info.contains("20 min ago"));
+        assert!(info.contains("Prices may be delayed"));
+        let missing = quote_context(&Quote { ts: 0, ..q }, 2200);
+        assert!(missing.contains("unavailable"));
     }
 
     #[test]

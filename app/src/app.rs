@@ -11,6 +11,7 @@ mod options_view;
 mod palette_view;
 mod panels;
 mod portfolio_view;
+mod screening_ui;
 mod settings_view;
 mod theming;
 mod workspace;
@@ -383,7 +384,13 @@ impl Pane {
 #[derive(Serialize, Deserialize)]
 struct Settings {
     #[serde(default)]
-    watchlist: Vec<String>,
+    watchlist: Option<Vec<String>>,
+    #[serde(default)]
+    screen: crate::screening::ScreenSettings,
+    #[serde(default)]
+    price_alerts: Vec<crate::screening::PriceAlert>,
+    #[serde(default)]
+    technical_alerts: Vec<crate::screening::TechnicalAlert>,
     #[serde(default = "default_true")]
     sidebar: bool,
     /// Name of the layout to restore on launch.
@@ -522,6 +529,11 @@ pub struct TerminalApp {
     congress_checked: Option<chrono::DateTime<chrono::Local>>,
 
     watchlist: Vec<String>,
+    screen: crate::screening::ScreenSettings,
+    price_alerts: Vec<crate::screening::PriceAlert>,
+    technical_alerts: Vec<crate::screening::TechnicalAlert>,
+    technicals: HashMap<String, crate::screening::TechnicalSnapshot>,
+    last_technicals: Option<Instant>,
     quotes: HashMap<String, Quote>,
     last_quotes: Option<Instant>,
     last_feed: Option<Instant>,
@@ -539,7 +551,6 @@ pub struct TerminalApp {
     system_accent: Color32,
     last_accent_poll: Option<Instant>,
     window_styled: bool,
-    updater_started: bool,
     /// The window is see-through behind the sidebar (macOS vibrancy).
     vibrancy: bool,
     /// Measured macOS title bar geometry (polled; changes with full screen).
@@ -552,14 +563,19 @@ pub struct TerminalApp {
 }
 
 /// Resolve a run of words (`BTCUSD CRNCY AAPL US EQUITY MSFT`) into market keys.
-/// Lay fresh quotes over the ones shown, and return the keys that got one. A perp that was
-/// asked for and left out has no other source, so its old quote goes rather than pass for current.
+/// Lay observations over the ones shown. Missing requested symbols are removed,
+/// not left looking live after a source failure.
 fn merge_quotes(shown: &mut HashMap<String, Quote>, asked: &[String], quotes: Vec<Quote>) -> Vec<String> {
     let keys: Vec<String> = quotes.iter().map(|q| q.symbol.clone()).collect();
-    for gone in asked.iter().filter(|k| tr_data::is_perp(k) && !keys.contains(k)) {
+    for gone in asked.iter().filter(|k| !keys.contains(k)) {
         shown.remove(gone);
     }
     for q in quotes {
+        // Do not replace a newer market observation with an older cached
+        // observation returned by a slower provider.
+        if shown.get(&q.symbol).is_some_and(|old| old.ts > 0 && q.ts > 0 && old.ts > q.ts) {
+            continue;
+        }
         shown.insert(q.symbol.clone(), q);
     }
     keys
@@ -672,6 +688,11 @@ impl TerminalApp {
             congress_status: String::new(),
             congress_checked: None,
             watchlist: DEFAULT_WATCHLIST.map(String::from).to_vec(),
+            screen: Default::default(),
+            price_alerts: Vec::new(),
+            technical_alerts: Vec::new(),
+            technicals: HashMap::new(),
+            last_technicals: None,
             quotes: HashMap::new(),
             last_quotes: None,
             last_feed: None,
@@ -686,7 +707,6 @@ impl TerminalApp {
             system_accent,
             last_accent_poll: None,
             window_styled: false,
-            updater_started: false,
             vibrancy: false,
             chrome: None,
             last_chrome_poll: None,
@@ -694,11 +714,25 @@ impl TerminalApp {
         };
         let mut doc = None;
         if let Some(s) = &settings {
-            if !s.watchlist.is_empty() {
+            if let Some(watchlist) = &s.watchlist {
                 // Older settings stored bare tickers; normalise to market keys.
-                app.watchlist = s.watchlist.iter().map(|w| tr_data::security(w).key()).collect();
-                app.watchlist.dedup();
+                app.watchlist = watchlist.iter().map(|w| tr_data::security(w).key()).collect();
+                let mut seen = std::collections::HashSet::new();
+                app.watchlist.retain(|key| seen.insert(key.clone()));
             }
+            app.screen = s.screen.clone();
+            if !app.screen.min_move_pct.is_finite() {
+                app.screen.min_move_pct = 1.0;
+            }
+            app.screen.min_move_pct = app.screen.min_move_pct.clamp(0.0, 1000.0);
+            app.screen.max_age_minutes = app.screen.max_age_minutes.filter(|m| (1..=1440).contains(m));
+            app.price_alerts =
+                s.price_alerts.iter().filter(|a| a.target.is_finite() && a.target > 0.0).cloned().collect();
+            app.price_alerts.truncate(200);
+            app.technical_alerts =
+                s.technical_alerts.iter().filter(|a| a.target.is_finite() && a.target >= 0.0).cloned().collect();
+            app.technical_alerts.truncate(200);
+            app.screen.min_volume_ratio = app.screen.min_volume_ratio.clamp(0.1, 100.0);
             app.sidebar_open = s.sidebar;
             if let Some(name) = &s.active_layout {
                 match app.store.load(name) {
@@ -737,7 +771,10 @@ impl TerminalApp {
 
     fn save_settings(&self) {
         let s = Settings {
-            watchlist: self.watchlist.clone(),
+            watchlist: Some(self.watchlist.clone()),
+            screen: self.screen.clone(),
+            price_alerts: self.price_alerts.clone(),
+            technical_alerts: self.technical_alerts.clone(),
             sidebar: self.sidebar_open,
             active_layout: Some(self.layout_name.clone()),
             layout: None,
@@ -860,6 +897,9 @@ impl TerminalApp {
             }
             Function::Refresh => self.worker.send(Request::RefreshCongress),
             Function::Watchlist => self.open_panel(PaneKind::Watchlist),
+            Function::Screen(arg) => self.screen_command(&arg),
+            Function::PriceAlert(arg) => self.price_alert_command(&arg),
+            Function::TechnicalAlert(arg) => self.technical_alert_command(&arg),
             Function::WatchAdd(words) => {
                 for key in keys_from_words(&words) {
                     if !self.watchlist.contains(&key) {
@@ -912,13 +952,7 @@ impl TerminalApp {
             }
             Function::Settings => self.open_panel(PaneKind::Settings),
             Function::Update => {
-                if !tr_macos::updater::check_for_updates() {
-                    let url = format!("{}/latest", tr_macos::updater::RELEASES);
-                    self.status = match broker::open_external(&url) {
-                        Ok(()) => "Opened the latest release on GitHub".into(),
-                        Err(e) => format!("Could not open {url}: {e}"),
-                    };
-                }
+                self.status = "Personal build: git pull --ff-only origin master, then rebuild locally".into();
             }
             Function::Options => {
                 let sym = self.optionable_symbol();
@@ -1032,8 +1066,9 @@ impl TerminalApp {
                     if quotes.len() > 20 {
                         self.wei_updated = Some(format!("updated {}", chrono::Local::now().format("%H:%M:%S")));
                     }
-                    merge_quotes(&mut self.quotes, &asked, quotes);
+                    self.on_market_quotes(&asked, quotes);
                 }
+                Response::Technicals { asked, snapshots } => self.on_technical_snapshots(&asked, snapshots),
                 Response::Latest(t) => self.latest = t,
                 Response::TickerTrades { pane, symbol, trades } => {
                     if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane)
@@ -1402,10 +1437,31 @@ impl TerminalApp {
     fn periodic(&mut self) {
         let visible = self.visible_panes();
         let shown = |f: &dyn Fn(&PaneKind) -> bool| visible.iter().any(|&i| f(&self.panes[i].kind));
-        let visible_wl = self.sidebar_open || shown(&|k| matches!(k, PaneKind::Watchlist));
+        let visible_wl = self.sidebar_open
+            || shown(&|k| matches!(k, PaneKind::Watchlist))
+            || self.price_alerts.iter().any(|a| !a.triggered);
         if visible_wl && self.last_quotes.is_none_or(|t| t.elapsed() > Duration::from_secs(20)) {
-            self.worker.send(Request::Quotes(self.watchlist.clone()));
+            let mut keys = self.watchlist.clone();
+            keys.extend(self.price_alerts.iter().filter(|a| !a.triggered).map(|a| a.symbol.clone()));
+            keys.sort();
+            keys.dedup();
+            if !keys.is_empty() {
+                self.worker.send(Request::Quotes(keys));
+            }
             self.last_quotes = Some(Instant::now());
+        }
+        let technical_scan = shown(&|k| matches!(k, PaneKind::Watchlist));
+        if (technical_scan || self.technical_alerts.iter().any(|a| !a.triggered))
+            && self.last_technicals.is_none_or(|t| t.elapsed() > Duration::from_secs(300))
+        {
+            let mut keys: Vec<String> = if technical_scan { self.watchlist.clone() } else { Vec::new() };
+            keys.extend(self.technical_alerts.iter().filter(|a| !a.triggered).map(|a| a.symbol.clone()));
+            keys.sort();
+            keys.dedup();
+            if !keys.is_empty() {
+                self.worker.send(Request::Technicals(keys.into_iter().take(40).collect()));
+            }
+            self.last_technicals = Some(Instant::now());
         }
         if shown(&|k| matches!(k, PaneKind::Wei)) && self.last_wei.is_none_or(|t| t.elapsed() > Duration::from_secs(20))
         {
@@ -1539,10 +1595,6 @@ impl eframe::App for TerminalApp {
         if !self.window_styled {
             self.window_styled = true;
             self.vibrancy = style_native_window(frame, self.prefs.appearance.vibrancy);
-        } else if !self.updater_started {
-            // From the second frame, so loading Sparkle doesn't delay the first.
-            self.updater_started = true;
-            tr_macos::updater::start();
         }
         if self.last_chrome_poll.is_none_or(|t| t.elapsed() > Duration::from_millis(750)) {
             let c = native_chrome(frame);
@@ -1701,13 +1753,36 @@ mod tests {
         let new: Settings = serde_json::from_str(r#"{"watchlist":[],"active_layout":"Desk"}"#).unwrap();
         assert!(migrate_legacy(&new, &prefs::PanelDefaults::default()).is_none());
         assert_eq!(new.active_layout.as_deref(), Some("Desk"));
+        assert_eq!(new.watchlist, Some(Vec::new()), "an intentionally empty watchlist survives restart");
+        let missing: Settings = serde_json::from_str(r#"{"active_layout":"Default"}"#).unwrap();
+        assert!(missing.watchlist.is_none(), "a legacy file without a watchlist preserves defaults");
     }
 
-    /// When the server can't quote a perp, the watchlist drops its old price instead of showing
-    /// it as current. Listed instruments keep theirs, as before.
     #[test]
-    fn perps_left_out_of_an_answer_lose_their_old_quote() {
-        let q = |s: &str, last: f64| Quote { symbol: s.into(), last, prev_close: last, ts: 0, spark: vec![] };
+    fn watchlist_screen_and_local_alerts_round_trip_without_public_services() {
+        let raw = r#"{
+            "watchlist": [],
+            "sidebar": false,
+            "screen": {"mode":"Movers", "sort":"Gainers", "min_move_pct":2.5, "max_age_minutes":30},
+            "price_alerts":[{"symbol":"005930.KS US Equity","direction":"Above","target":210000.0}],
+            "active_layout":"Default"
+        }"#;
+        let doc: Settings = serde_json::from_str(raw).unwrap();
+        assert_eq!(doc.watchlist, Some(Vec::new()));
+        assert_eq!(doc.screen.mode, crate::screening::ScreenMode::Movers);
+        assert_eq!(doc.screen.min_move_pct, 2.5);
+        assert_eq!(doc.price_alerts.len(), 1);
+        assert!(!doc.price_alerts[0].triggered);
+        let restored: Settings = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert_eq!(restored.screen.sort, crate::screening::ScreenSort::Gainers);
+        assert_eq!(restored.price_alerts[0].target, 210000.0);
+    }
+
+    /// Any missing requested quote is cleared instead of being presented as current.
+    #[test]
+    fn missing_requested_quotes_are_cleared() {
+        let q =
+            |s: &str, last: f64| Quote { symbol: s.into(), last, prev_close: last, ts: 0, spark: vec![], source: None };
         let mut shown: HashMap<String, Quote> =
             [q("xyz:AAPL", 336.0), q("xyz:GOLD", 3958.0), q("AAPL US Equity", 336.5)]
                 .map(|x| (x.symbol.clone(), x))
@@ -1717,7 +1792,7 @@ mod tests {
         assert_eq!(got, ["xyz:GOLD"]);
         assert!(!shown.contains_key("xyz:AAPL"), "the perp the server didn't quote");
         assert_eq!(shown["xyz:GOLD"].last, 3960.0);
-        assert_eq!(shown["AAPL US Equity"].last, 336.5, "a listed instrument keeps its last quote");
+        assert!(!shown.contains_key("AAPL US Equity"), "stale listed quotes must not appear current");
         merge_quotes(&mut shown, &["xyz:SP500".into()], vec![]);
         assert!(shown.contains_key("xyz:GOLD"), "a perp nobody asked about this time stays");
     }

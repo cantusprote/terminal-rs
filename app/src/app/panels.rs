@@ -130,20 +130,94 @@ impl TerminalApp {
         let mut out = Vec::new();
         let row_h = dp(22.0);
         let w = ui.available_width();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("SCREEN").font(mono(11.0)).color(amber()));
+            egui::ComboBox::from_id_salt("wl-screen-mode").selected_text(self.screen.mode.label()).show_ui(ui, |ui| {
+                for mode in crate::screening::ScreenMode::ALL {
+                    ui.selectable_value(&mut self.screen.mode, mode, mode.label());
+                }
+            });
+            if matches!(
+                self.screen.mode,
+                crate::screening::ScreenMode::Gainers
+                    | crate::screening::ScreenMode::Losers
+                    | crate::screening::ScreenMode::Movers
+            ) {
+                ui.label("±%");
+                ui.add(egui::DragValue::new(&mut self.screen.min_move_pct).speed(0.1).range(0.0..=1000.0));
+            }
+            if self.screen.mode == crate::screening::ScreenMode::VolumeSurge {
+                ui.label("Volume ×");
+                ui.add(egui::DragValue::new(&mut self.screen.min_volume_ratio).speed(0.1).range(0.1..=100.0));
+            }
+            egui::ComboBox::from_id_salt("wl-screen-sort").selected_text(self.screen.sort.label()).show_ui(ui, |ui| {
+                for sort in crate::screening::ScreenSort::ALL {
+                    ui.selectable_value(&mut self.screen.sort, sort, sort.label());
+                }
+            });
+            let fresh = self.screen.max_age_minutes.is_some();
+            if ui
+                .selectable_label(fresh, "Recent ≤30m")
+                .on_hover_text("Only quote observations from the last 30 minutes")
+                .clicked()
+            {
+                self.screen.max_age_minutes = if fresh { None } else { Some(30) };
+            }
+        });
+        let rows = crate::screening::screened_symbols(
+            &self.watchlist,
+            &self.quotes,
+            &self.technicals,
+            &self.screen,
+            chrono::Utc::now().timestamp(),
+        );
+        ui.label(
+            RichText::new(format!(
+                "{} / {} tracked symbols · scan covers watchlist only · hover for source/time",
+                rows.len(),
+                self.watchlist.len()
+            ))
+            .font(ui_font(10.5))
+            .color(muted()),
+        );
         let (hdr, _) = ui.allocate_exact_size(vec2(w, row_h), Sense::hover());
         let p = ui.painter();
         p.rect_filled(hdr, theme::CONTROL_RADIUS, theme::header());
-        let cols = [0.0, 0.34, 0.58, 0.79, 1.0];
+        // Narrow docked panes have room for ticker, last and percent only.
+        // Do not paint the full-width columns over each other.
+        let compact = w < 440.0;
+        let cols = if compact { [0.0, 0.34, 0.66, 0.80, 1.0] } else { [0.0, 0.34, 0.58, 0.79, 1.0] };
         let col = |r: Rect, k: usize| r.left() + 8.0 + (r.width() - 16.0) * cols[k];
         p.text(pos2(col(hdr, 0), hdr.center().y), Align2::LEFT_CENTER, "Security", ui_font(11.5), muted());
         for (k, h) in [(2, "Last"), (3, "Change"), (4, "%")] {
+            if compact && k == 3 {
+                continue;
+            }
             p.text(pos2(col(hdr, k), hdr.center().y), Align2::RIGHT_CENTER, h, ui_font(11.5), muted());
         }
         let mut remove = None;
+        let mut create_alert = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for s in &self.watchlist {
+            for s in &rows {
                 let sec = tr_data::security(s);
                 let (r, resp) = ui.allocate_exact_size(vec2(w, row_h), Sense::click());
+                let info = self.quotes.get(s).map(|q| markets_view::quote_context(q, chrono::Utc::now().timestamp()));
+                let tech = self.technicals.get(s).map(|snap| {
+                    let n = |v: Option<f64>| v.map_or("—".into(), |v| format!("{v:.2}"));
+                    format!(
+                        "Daily SMA20: {} | RSI14: {} | Volume/20D: {}×{}",
+                        n(snap.sma20),
+                        n(snap.rsi14),
+                        n(snap.volume_ratio20),
+                        if snap.sample { " (sample)" } else { " (current candle may be incomplete)" },
+                    )
+                });
+                let resp = match (info, tech) {
+                    (Some(q), Some(t)) => resp.on_hover_text(format!("{q}\n{t}")),
+                    (Some(q), None) => resp.on_hover_text(q),
+                    (None, Some(t)) => resp.on_hover_text(t),
+                    (None, None) => resp,
+                };
                 widgets::hover_wash(ui, r, &resp, false);
                 let p = ui.painter();
                 let tick = p.layout_no_wrap(sec.ticker.clone(), mono(12.5), amber());
@@ -153,7 +227,9 @@ impl TerminalApp {
                     tr_core::AssetClass::Perp => (tr_core::perps::badge(s), theme::perp()),
                     c => (c.yellow_key().label().to_string(), muted()),
                 };
-                p.text(pos2(label_x, r.center().y), Align2::LEFT_CENTER, label, ui_font(11.0), lc);
+                if !compact {
+                    p.text(pos2(label_x, r.center().y), Align2::LEFT_CENTER, label, ui_font(11.0), lc);
+                }
                 match self.quotes.get(s) {
                     Some(q) => {
                         let c = if q.change() >= 0.0 { theme::up() } else { theme::down() };
@@ -165,13 +241,15 @@ impl TerminalApp {
                             mono(12.5),
                             text(),
                         );
-                        p.text(
-                            pos2(col(r, 3), r.center().y),
-                            Align2::RIGHT_CENTER,
-                            markets_view::change_text(&sec, q),
-                            mono(12.5),
-                            c,
-                        );
+                        if !compact {
+                            p.text(
+                                pos2(col(r, 3), r.center().y),
+                                Align2::RIGHT_CENTER,
+                                markets_view::change_text(&sec, q),
+                                mono(12.5),
+                                c,
+                            );
+                        }
                         p.text(
                             pos2(col(r, 4), r.center().y),
                             Align2::RIGHT_CENTER,
@@ -192,6 +270,17 @@ impl TerminalApp {
                         out.push(Action::OpenChart(s.clone()));
                         ui.close();
                     }
+                    if self.quotes.contains_key(s) {
+                        ui.separator();
+                        if ui.button("Alert: crosses 2% above current price").clicked() {
+                            create_alert = Some((s.clone(), crate::screening::Direction::Above));
+                            ui.close();
+                        }
+                        if ui.button("Alert: crosses 2% below current price").clicked() {
+                            create_alert = Some((s.clone(), crate::screening::Direction::Below));
+                            ui.close();
+                        }
+                    }
                     if sec.has_congress_trades() && ui.button("Who in Congress Traded This").clicked() {
                         out.push(Action::OpenTicker(sec.ticker.clone()));
                         ui.close();
@@ -205,11 +294,56 @@ impl TerminalApp {
             }
             ui.add_space(4.0);
             ui.label(
-                RichText::new("WL ADD <KEY> to add · right-click a row for options").font(ui_font(11.0)).color(muted()),
+                RichText::new("SCAN UP 2 · DOWN 2 · VOL 2 · SMA ABOVE · RSI HIGH · FRESH 10")
+                    .font(ui_font(10.5))
+                    .color(muted()),
             );
+            ui.label(
+                RichText::new("PRICEALERT AAPL ABOVE 210 · PRICEALERT 005930.KS BELOW 70000")
+                    .font(ui_font(10.5))
+                    .color(muted()),
+            );
+            ui.label(
+                RichText::new("TECHALERT AAPL VOL 2 · TECHALERT AAPL RSI ABOVE 70 · TECHALERT AAPL SMA BELOW")
+                    .font(ui_font(10.5))
+                    .color(muted()),
+            );
+            let mut remove_alert = None;
+            ui.collapsing(format!("Local price alerts ({})", self.price_alerts.len()), |ui| {
+                for (i, alert) in self.price_alerts.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let state = if alert.triggered { "Triggered" } else { "Watching" };
+                        ui.label(format!("{} · {} {} · {state}", alert.symbol, alert.direction.label(), alert.target));
+                        if ui.small_button("Remove").clicked() {
+                            remove_alert = Some(i);
+                        }
+                    });
+                }
+            });
+            if let Some(i) = remove_alert {
+                self.price_alerts.remove(i);
+            }
+            let mut remove_technical = None;
+            ui.collapsing(format!("Technical alerts ({})", self.technical_alerts.len()), |ui| {
+                for (i, alert) in self.technical_alerts.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let state = if alert.triggered { "Triggered" } else { "Watching" };
+                        ui.label(format!("{} · {} {} · {state}", alert.symbol, alert.signal.label(), alert.target));
+                        if ui.small_button("Remove").clicked() {
+                            remove_technical = Some(i);
+                        }
+                    });
+                }
+            });
+            if let Some(i) = remove_technical {
+                self.technical_alerts.remove(i);
+            }
         });
         if let Some(s) = remove {
             self.watchlist.retain(|x| *x != s);
+        }
+        if let Some((s, direction)) = create_alert {
+            self.add_relative_price_alert(s, direction);
         }
         out
     }

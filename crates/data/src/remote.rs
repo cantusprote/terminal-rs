@@ -573,6 +573,7 @@ impl<P: MarketData + 'static> RemoteMarkets<P> {
                 prev_close: q.prev_day.unwrap_or(q.px),
                 ts: q.ts_ms / 1000,
                 spark,
+                source: Some("Terminal market-data server".into()),
             })
             .collect())
     }

@@ -63,7 +63,14 @@ impl MarketData for SampleProvider {
             let bars = self.history(s, Timeframe::D1, None, 2).await?;
             if let Some(last) = bars.last() {
                 let prev = if bars.len() > 1 { bars[bars.len() - 2].close } else { last.open };
-                out.push(Quote { symbol: s.clone(), last: last.close, prev_close: prev, ts: last.ts, spark: vec![] });
+                out.push(Quote {
+                    symbol: s.clone(),
+                    last: last.close,
+                    prev_close: prev,
+                    ts: last.ts,
+                    spark: vec![],
+                    source: Some("Sample".into()),
+                });
             }
         }
         Ok(out)

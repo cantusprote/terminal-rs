@@ -27,6 +27,7 @@ use tr_data::BarCache;
 use tr_data::{Provider, Quote, SearchHit, YieldCurves, rt};
 
 use crate::command::IndicatorSpec;
+use crate::screening::TechnicalSnapshot;
 use crate::theme;
 
 pub type PaneId = u64;
@@ -119,6 +120,8 @@ pub enum Request {
         symbol: String,
     },
     Quotes(Vec<String>),
+    /// Daily-bar SMA20, RSI14 and volume ratio for local watchlist analysis.
+    Technicals(Vec<String>),
     Latest {
         limit: usize,
     },
@@ -229,6 +232,10 @@ pub enum Response {
     Quotes {
         asked: Vec<String>,
         quotes: Vec<Quote>,
+    },
+    Technicals {
+        asked: Vec<String>,
+        snapshots: Vec<TechnicalSnapshot>,
     },
     Latest(Vec<Trade>),
     TickerTrades {
@@ -449,6 +456,22 @@ fn cached_bars(_: &Shared, _: &str, _: Timeframe, _: usize) -> Option<Vec<Bar>> 
 #[cfg(target_arch = "wasm32")]
 fn cache_bars(_: &Shared, _: &str, _: Timeframe, _: &[Bar]) {}
 
+/// Sanitize external OHLCV before it enters the chart/GPU/cache. The exchanges
+/// occasionally return duplicate timestamps and malformed/NaN candles.
+/// Negative price levels are allowed here because yields can be negative.
+pub(crate) fn normalize_bars(bars: Vec<Bar>) -> Vec<Bar> {
+    let valid: Vec<Bar> = bars.into_iter().filter(valid_bar).collect();
+    tr_core::Series::new("normalized", Timeframe::D1, valid).bars
+}
+
+fn valid_bar(b: &Bar) -> bool {
+    [b.open, b.high, b.low, b.close, b.volume].iter().all(|x| x.is_finite())
+        && b.high >= b.open.max(b.close)
+        && b.low <= b.open.min(b.close)
+        && b.high >= b.low
+        && b.volume >= 0.0
+}
+
 fn overlay(values: &[f64], color: egui::Color32, kind: LineKind) -> Overlay {
     let line = if kind == LineKind::Dots { marker_ref(values) } else { line_ref(values) };
     Overlay { line, color: theme::rgba(color), kind, scale: 1.0 }
@@ -536,7 +559,7 @@ async fn handle(s: &Arc<Shared>, req: Request) {
                 return; // a newer load for this pane is already running
             }
             // Paint from the disk cache immediately, then refresh from the network.
-            if let Some(bars) = cached_bars(s, &symbol, tf, limit).filter(|b| !b.is_empty()) {
+            if let Some(bars) = cached_bars(s, &symbol, tf, limit).map(normalize_bars).filter(|b| !b.is_empty()) {
                 let bars = Arc::new(bars);
                 let gpu = build_gpu(bars.clone()).await;
                 s.send(Response::History {
@@ -576,7 +599,7 @@ async fn handle(s: &Arc<Shared>, req: Request) {
             }
             match s.provider.history(&symbol, tf, Some(first.ts), limit).await {
                 Ok(older) => {
-                    let older: Vec<Bar> = older.into_iter().filter(|b| b.ts < first.ts).collect();
+                    let older: Vec<Bar> = normalize_bars(older).into_iter().filter(|b| b.ts < first.ts).collect();
                     let prepended = older.len();
                     let bars = {
                         let mut map = s.series.lock().expect("series lock");
@@ -619,6 +642,7 @@ async fn handle(s: &Arc<Shared>, req: Request) {
             let limit = base.len().max(100);
             match s.provider.history(&symbol, tf, None, limit).await {
                 Ok(other) => {
+                    let other = normalize_bars(other);
                     let line = rt::blocking(move || line_ref(&align_compare(&base, &other))).await;
                     if let Some(line) = line {
                         s.send(Response::Compare { pane, generation, symbol, line });
@@ -643,6 +667,24 @@ async fn handle(s: &Arc<Shared>, req: Request) {
                 s.send(Response::Quotes { asked: symbols, quotes: Vec::new() });
             }
         },
+        Request::Technicals(symbols) => {
+            // A mixed source with explicit synthetic fallback cannot tell the
+            // historical-data origin per bar; conservatively disable
+            // transaction-free technical alerts on those bars.
+            let sample = s.provider.name() == "sample"
+                || s.provider.name().ends_with("+sample")
+                || std::env::var("TR_SAMPLE_FALLBACK").is_ok_and(|s| s == "1" || s == "true");
+            let queries = symbols.iter().cloned().map(|symbol| {
+                let provider = s.provider.clone();
+                async move {
+                    let bars = provider.history(&symbol, Timeframe::D1, None, 45).await.ok()?;
+                    let bars = normalize_bars(bars);
+                    TechnicalSnapshot::from_bars(symbol, &bars, sample)
+                }
+            });
+            let snapshots = futures_join(queries).await.into_iter().flatten().collect();
+            s.send(Response::Technicals { asked: symbols, snapshots });
+        }
         Request::Latest { limit } => {
             let t = s.db.lock().await.latest_trades(limit).unwrap_or_default();
             s.send(Response::Latest(t));
@@ -795,6 +837,9 @@ struct Applied {
 }
 
 fn apply_live_bar(bars: &mut Vec<Bar>, bar: Bar) -> Applied {
+    if !valid_bar(&bar) {
+        return Applied::default();
+    }
     let (len, last) = (bars.len(), bars.last().map(|b| b.ts));
     let changed = Series::apply_live(bars, bar);
     Applied { changed, inserted: bars.len() > len && bars.last().map(|b| b.ts) == last }
@@ -811,6 +856,11 @@ async fn loaded(
     limit: usize,
     bars: Vec<Bar>,
 ) {
+    let bars = normalize_bars(bars);
+    if bars.is_empty() {
+        s.send(Response::HistoryError { pane, generation, error: format!("no valid OHLCV data for {symbol}") });
+        return;
+    }
     cache_bars(s, &symbol, tf, &bars);
     let exhausted = bars.len() < limit / 2;
     let bars = Arc::new(bars);
@@ -996,6 +1046,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rejects_bad_market_candles_before_chart_and_preserves_order() {
+        let b = |ts, c: f64| Bar::new(ts, c, c + 1.0, c - 1.0, c, 10.0);
+        let data = vec![
+            b(120, 20.0),
+            Bar::new(60, 10.0, 10.0, 9.0, 11.0, 10.0), // impossible high
+            b(0, -1.0),                                // negative yields are allowed
+            b(120, 21.0),                              // latest duplicate wins
+            Bar::new(180, 0.0, 1.0, -1.0, f64::NAN, 10.0),
+            Bar::new(240, 5.0, 6.0, 4.0, 5.0, -1.0),
+        ];
+        let bars = normalize_bars(data);
+        assert_eq!(bars.iter().map(|b| b.ts).collect::<Vec<_>>(), [0, 120]);
+        assert_eq!(bars[1].close, 21.0);
+        let mut live = bars;
+        assert!(!apply_live_bar(&mut live, Bar::new(180, 4.0, 5.0, 3.0, f64::INFINITY, 1.0)).changed);
+        assert_eq!(live.len(), 2);
+    }
+
+    #[test]
     fn bars_filling_a_gap_are_reported_as_inserted() {
         let b = |ts: i64| Bar::new(ts, 1.0, 1.0, 1.0, 1.0, 1.0);
         let mut bars = vec![b(0), b(60), b(240)];
@@ -1086,7 +1155,7 @@ mod tests {
             if n > 1 {
                 self.reload.notified().await;
             }
-            Ok(vec![Bar::new(0, 1.0, 1.0, 1.0, n as f64, 1.0)])
+            Ok(vec![Bar::new(0, 1.0, n as f64, 1.0, n as f64, 1.0)])
         }
 
         fn live(&self, _: &str, _: Timeframe) -> Option<tr_data::LiveFeed> {
@@ -1113,7 +1182,7 @@ mod tests {
         async fn history(&self, _: &str, _: Timeframe, _: Option<i64>, _: usize) -> anyhow::Result<Vec<Bar>> {
             let n = self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             anyhow::ensure!(n > self.down, "the Terminal server is not reachable");
-            Ok(vec![Bar::new(0, 1.0, 1.0, 1.0, 7.0, 1.0)])
+            Ok(vec![Bar::new(0, 1.0, 7.0, 1.0, 7.0, 1.0)])
         }
     }
 

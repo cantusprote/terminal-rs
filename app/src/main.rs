@@ -12,6 +12,7 @@ mod layouts;
 mod markets_view;
 mod palette;
 mod prefs;
+mod screening;
 mod storage;
 mod theme;
 mod themes;
