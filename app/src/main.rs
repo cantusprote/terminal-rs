@@ -7,7 +7,6 @@ mod chart_view;
 mod command;
 mod congress_view;
 mod dock;
-mod hl_worker;
 mod layout;
 mod layouts;
 mod markets_view;
@@ -16,7 +15,6 @@ mod prefs;
 mod storage;
 mod theme;
 mod themes;
-mod wallet_worker;
 #[cfg(target_arch = "wasm32")]
 mod web;
 mod widgets;

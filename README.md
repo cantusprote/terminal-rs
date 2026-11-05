@@ -5,7 +5,7 @@ Bloomberg Terminal look (dense tiled panes, monospace numbers, a command line li
 across **stocks, ETFs, indices, FX, crypto, US Treasuries, futures/commodities and options**,
 plus **congressional trade tracking ingested directly from the official STOCK Act disclosure
 systems** and **your own brokerage accounts through [SnapTrade](https://snaptrade.com)**
-(read-only by default, with opt-in order entry). Native compact UI, themes from Bloomberg amber
+(read-only monitoring only; **no order execution, cancellation or wallet signing**). Native compact UI, themes from Bloomberg amber
 to Solarized, and a fully dockable
 workspace with saved layouts.
 
@@ -155,20 +155,14 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
   position, order or activity row charts it, and right-click offers the option chain, news,
   Congress trades and watchlist. `AAPL POS` / `AAPL ORD` filter to one security, the account picker
   to one account. Stocks, ETFs, funds, crypto and options (OCC symbols shown as `AAPL 350C`) are
-  supported. Read-only unless you turn on trading (below); Connect Brokerage requests read-only
+  supported. All brokerage views are read-only; Connect Brokerage requests read-only
   access. Without credentials the panes show a setup screen; offline (`TR_PROVIDER=sample` or
   `TR_BROKER=sample`) they show a clearly labelled simulated portfolio. See
   [Brokerage setup](#brokerage-setup-snaptrade).
-- **Demo account and easy trading** — a **DEMO** paper-trading account ($100,000 virtual cash) is
-  selected by default; the toolbar badge shows DEMO or a red **LIVE** and switches between them
-  (switching to live asks first and is remembered). Buy/Sell buttons sit on charts, watchlist rows
-  and positions (plus **Close**), ⇧B / ⇧S trade the security in focus, and `BUY AAPL 10`,
-  `SELL ALL TSLA`, `BUY NVDA $500`, `SELL MSFT 5 LMT 410` work from the command line or ⌘K. One
-  compact ticket: side, shares or dollars, market/limit (stops under More), live estimated cost
-  against buying power. Demo orders fill in one click at the live quote (limits and stops when
-  the quote crosses) and persist in the app data folder; Settings › Trading resets the account.
-  Live orders stay opt-in and go through SnapTrade's preview and a single confirmation. See
-  [Trading](#trading-opt-in).
+- **Analysis-only by design** — no order entry, trade preview, buy/sell hotkeys,
+  trade cancellation, paper-trading engine, trading mode, or Turnkey wallet integration.
+  The toolbar identifies the terminal as **READ ONLY**; historic brokerage
+  transactions can still be inspected but never modified from the terminal.
 - **Command palette** — ⌘K (Ctrl+K on Linux and Windows) opens a centred, theme-matched palette
   that fuzzy-searches every function code (`PORT`, `POS`, `ORD`, `OMON`, `THEME`, …), tickers
   (load the quote and chart), new panels, layout presets and saved layouts, themes, Settings tabs
@@ -226,9 +220,9 @@ cd site && npm run dev                                      # then open http://l
 
 `scripts/build-web.sh <dir>` writes somewhere else instead; any static file server works. Add
 `?sample` to the URL to run offline on sample data, or `?fps` for the frame-time readout.
-Every push to `master` builds it and deploys it with the site to
-[terminal.rasmic.xyz/app](https://terminal.rasmic.xyz/app/). Pull requests get a preview;
-[site/README.md](site/README.md#deploys) covers the workflow and the secrets it needs.
+Web deployment is manual from this independent repository. The original
+developer's website is not the release site for this build;
+[site/README.md](site/README.md#deploys) covers the workflow.
 
 ![The browser build in Chrome: a live BTCUSD chart from Binance beside a demo-account position](docs/img/web-live-crypto.png)
 
@@ -240,9 +234,9 @@ What the browser build can and can't do yet:
   proxy can fix that later.
 - HIP-3 perps (`xyz:AAPL`) are live through the Terminal data server the page is built with. They
   never fall back to sample data: while the server is unreachable they say so.
-- Congress disclosures, SnapTrade accounts and live order entry need the desktop app. The paper
-  trading demo account works.
-- Layouts, settings, themes and the demo account are saved in `localStorage` under `terminal/`.
+- Congress disclosures and SnapTrade accounts need the desktop app; order entry
+  and wallet signing are absent on every platform.
+- Layouts, settings and themes are saved in `localStorage` under `terminal/`.
   The first load copies anything saved under the old `terminal-rs/` prefix, without overwriting
   newer entries.
 - Charts need WebGPU, since they read bars from storage buffers in the vertex shader. Browsers
@@ -304,45 +298,13 @@ visible (every 20 s for five minutes after opening the portal); `PORT REFRESH` r
 Brokerage data can be delayed or cached by SnapTrade depending on your plan, which is why holdings
 are repriced with the terminal's live quotes where a market key exists.
 
-## Trading (opt-in)
+## Read-only design
 
-The **demo account** needs no setup: it is a local paper-trading account (`demo-account.json` in
-the app data folder) with no commissions, no short selling and Day orders expiring at the 4 p.m.
-New York close. Switch to your brokerage accounts with the toolbar badge, `MODE LIVE`, or
-Settings › Trading (`DEMO` switches back).
-
-Live trading is **off** until you enable it in **Settings › Trading**, which asks you to
-acknowledge that confirmed orders are real. Then:
-
-1. Make sure the connection allows trading. Connections made with **Connect Brokerage** are
-   read-only; **Reconnect with Trading Access…** in Settings › Trading opens the Connection Portal
-   asking for trading access where the broker supports it (`trade-if-available`). Settings ›
-   Trading lists, per brokerage, whether trading is available, from SnapTrade's
-   `allows_trading` flag and each connection's access type.
-2. Open a ticket (`BUY AAPL 10`, a Buy/Sell button, ⇧B / ⇧S), pick the account and order type,
-   and click **Review**. The broker checks the order through SnapTrade's
-   [order impact](https://docs.snaptrade.com/reference/Trading/Trading_getOrderImpact) endpoint;
-   nothing is placed.
-3. The broker's estimate opens one confirmation dialog. **Send** places exactly the previewed trade
-   (`POST /trade/{tradeId}`). Editing the ticket after previewing, or waiting past the preview's
-   validity (SnapTrade expires it after five minutes), requires a new preview.
-   A preview is used up when it is sent. If the answer is lost (network error, timeout, 5xx),
-   the ticket reports the status as **unknown** and opens `ORD`, because the broker may have
-   accepted the order; only a 4xx is reported as a rejection.
-
-Which order types a broker accepts varies and SnapTrade does not publish it per broker, so the
-preview is where unsupported combinations are rejected. Dollar amounts work only for market/day
-orders at brokers that support notional orders; fractional share quantities are refused up front
-at brokers SnapTrade reports as not supporting them. Settings › Trading also has an optional
-**maximum order value** and a default account.
-
-Trading access is read once per brokerage connection (`/authorizations`), cached for an hour (on
-disk too) with a **Refresh** button. SnapTrade requests are limited to four at a time; a
-rate-limited read waits for `Retry-After` and retries, and a rate limit is shown as a quiet
-"retrying" note rather than an error. Orders are never retried automatically.
-
-Tests never place real orders: the trading client is exercised only against a local mock server,
-and the app's flows against the simulated portfolio and the demo account.
+All financial instruments are for **quotes, charts, historical research and
+portfolio monitoring only**. Brokerage connections use read-only account
+access. Terminal has no code path to place/cancel orders or sign wallet
+transactions. Legacy trading configuration fields are ignored on load.
+Historical order and activity records remain visible for analysis.
 
 ## Keyboard shortcuts and commands
 
@@ -378,8 +340,7 @@ Settings › Hotkeys. On Linux and Windows ⌘ is Ctrl and ⌥ is Alt.
 | `THEME BLOOMBERG` · `THEME NEXT` · `THEME SYSTEM` · `THEME EDIT` · `THEME COMPACT` · `LAYOUT THEME ON` | themes |
 | `PORT` · `ACCT` · `POS` · `ORD` · `ACTV` · `AAPL POS` · `AAPL ORD` | brokerage portfolio · accounts and balances · positions · orders · activity · one security |
 | `PORT REFRESH` · `PORT CONNECT` · `PORT SETUP` (`BROKER`) | reload accounts · connect a broker in the browser · SnapTrade keys |
-| `BUY AAPL 10` · `SELL ALL TSLA` · `SELL MSFT 5 LMT 410` · `SELL TSLA 3 STP 250 LMT 245` · `BUY NVDA $500` · `TRADE` | order ticket, prefilled (demo: one click; live: review and confirm) |
-| `DEMO` · `MODE LIVE` · ⇧B · ⇧S | switch account mode · buy / sell the security in focus |
+| `BUY` · `SELL` · `TRADE` · `DEMO` · `MODE LIVE` | unavailable: read-only terminal |
 | `SIDEBAR RIGHT` · `SIDEBAR` · `PREFS` · `HELP` | sidebar side or visibility · settings · help |
 | right-click chart / watchlist / feed row / sidebar toggle | context menu (chart type, indicators, draw, add to watchlist, who traded it, View menu) |
 
@@ -404,8 +365,8 @@ crates/data     MarketData trait; per-class router (Binance/Coinbase, Treasury.g
 crates/chart    wgpu renderer, LOD pyramids, viewport math, axes, drawings, egui paint callback
 crates/congress Senate eFD + House Clerk parsers, rosters, SQLite store, refresh, alerts, performance
 crates/broker   SnapTrade client (request signing, accounts, balances, positions, orders, activity),
-                order entry (impact preview, place, cancel, capabilities), portfolio model and P&L,
-                Keychain / owner-only credential store, simulated sample and order simulator
+                read-only portfolio model and P&L, Keychain / owner-only credential store,
+                and an offline sample portfolio (no order execution)
 docs/analysis   REA research notes on TradingView chart UX
 ```
 
@@ -489,11 +450,8 @@ cargo bench -p tr-core && cargo bench -p tr-chart
   string and numeric decimals, a failing account); P&L for longs, shorts and option multipliers;
   market-key mapping; OCC symbols; credential storage permissions and redaction; errors never
   echo the user secret; every portfolio view renders.
-- Trading: order validation (prices per order type, stop-limit direction, notional rules,
-  path-safe ids); a mock SnapTrade trading server checks the signed symbol lookup, order impact,
-  placement of the previewed trade, cancel and portal requests; expired or simulated previews are
-  never sent; per-account capabilities from brokerage and connection; `BUY`/`SELL`/`TRADE`
-  parsing; edited tickets invalidate their preview; the simulator fills, rests and cancels orders.
+- Read-only guardrails: order commands are rejected at the parser and there are
+  no trade submission, cancellation or wallet signing modules in the build.
 - The chart renders real frames offscreen on whatever adapter is present and checks pixels.
 
 ## Platform notes and limitations

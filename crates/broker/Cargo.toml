@@ -1,6 +1,6 @@
 [package]
 name = "tr-broker"
-description = "Brokerage accounts through SnapTrade: signed API client, portfolio model, order entry and credential storage"
+description = "Read-only brokerage accounts through SnapTrade: API client, portfolio model and credential storage"
 version.workspace = true
 edition.workspace = true
 
@@ -16,14 +16,9 @@ futures = "0.3"
 hmac = "0.12"
 sha2 = "0.10"
 base64 = "0.23"
-zeroize = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
-
-# Hyperliquid agent keys on Linux: the Secret Service over D-Bus (pure Rust, no libdbus).
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio.workspace = true

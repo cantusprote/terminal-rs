@@ -111,40 +111,15 @@ impl TerminalApp {
         ui.interact(chip, Id::new("source-chip"), Sense::hover()).on_hover_text(provider_label(&self.provider));
         x = chip.right() + 8.0;
 
-        // Which account trades: DEMO (paper) or LIVE (real money, in red). Click to switch.
-        let live_mode = !self.demo_mode();
-        let (label, fill) = if live_mode { ("LIVE", theme::down()) } else { ("DEMO", theme::accent()) };
-        let badge_text = p.layout_no_wrap(label.into(), mono(11.0), Color32::WHITE);
-        let badge = Rect::from_min_size(pos2(x, cy - 10.0), vec2(badge_text.size().x + 18.0, 20.0));
-        let resp = ui.interact(badge, Id::new("account-mode-badge"), Sense::click());
-        let fill = if resp.hovered() { fill } else { fill.gamma_multiply(0.9) };
-        p.rect_filled(badge, 10.0, fill);
-        p.galley(badge.center() - badge_text.size() / 2.0, badge_text, Color32::WHITE);
-        let tip = if live_mode {
-            "LIVE: portfolio panes and orders use your real brokerage accounts. Click to switch to the demo account."
-        } else {
-            "DEMO: paper trading with virtual cash. Click to switch to your live brokerage accounts."
-        };
-        if resp.on_hover_text(tip).clicked() {
-            let next = if live_mode { crate::prefs::AccountMode::Demo } else { crate::prefs::AccountMode::Live };
-            self.set_account_mode(next, false);
-        }
-        if live_mode {
-            // A red rule along the toolbar so live mode is never mistaken for the demo.
-            p.hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(2.0, theme::down()));
-        }
+        // Analysis only: display a noninteractive badge, never a trading mode selector.
+        let label = p.layout_no_wrap("READ ONLY".into(), mono(10.5), text());
+        let badge = Rect::from_min_size(pos2(x, cy - 9.0), vec2(label.size().x + 16.0, 18.0));
+        p.rect_filled(badge, 9.0, theme::control());
+        p.galley(badge.center() - label.size() / 2.0, label, text());
+        ui.interact(badge, Id::new("readonly-badge"), Sense::hover()).on_hover_text(
+            "Market research and portfolio monitoring only. Order entry and wallet signing are not available.",
+        );
         x = badge.right() + 10.0;
-        // A Hyperliquid account in LIVE is on testnet: say so next to the badge.
-        if live_mode && self.hl_master().is_some() {
-            let t = p.layout_no_wrap("TESTNET".into(), mono(11.0), Color32::BLACK);
-            let pill = Rect::from_min_size(pos2(x - 4.0, cy - 10.0), vec2(t.size().x + 18.0, 20.0));
-            p.rect_filled(pill, 10.0, amber());
-            p.galley(pill.center() - t.size() / 2.0, t, Color32::BLACK);
-            ui.interact(pill, Id::new("hl-testnet-badge"), Sense::hover()).on_hover_text(
-                "The Hyperliquid account in LIVE is on testnet (test funds). This build cannot reach mainnet.",
-            );
-            x = pill.right() + 10.0;
-        }
 
         // Right-hand cluster, laid out from the right edge: one-line clock (UTC on hover).
         let now = chrono::Local::now();
@@ -416,9 +391,8 @@ impl TerminalApp {
                 None => {}
             }
             self.cmd_hist_pos = None;
-            // The command line stays live, Bloomberg-style, unless the command opened the
-            // order ticket (which takes the keyboard for its quantity) or the palette.
-            self.focus_cmd = !self.palette.open && !self.trading.ticket.as_ref().is_some_and(|t| t.focus_qty > 0);
+            // The command line stays live (there is no order-entry ticket).
+            self.focus_cmd = !self.palette.open;
             if !self.focus_cmd {
                 resp.surrender_focus();
             }
@@ -664,7 +638,7 @@ impl TerminalApp {
             });
             let pf = self.shown_portfolio();
             let value_badge = pf.filter(|p| !p.accounts.is_empty()).map(|p| {
-                let t = p.totals(None, |pos| super::broker::live_price(&self.quotes, &self.hl.mids, pos));
+                let t = p.totals(None, |pos| super::broker::live_price(&self.quotes, pos));
                 compact_money(t.value)
             });
             let open_orders = pf.map_or(0, |p| p.orders.iter().filter(|o| o.is_open()).count());
@@ -907,16 +881,7 @@ impl TerminalApp {
             let mut p = layer.clone();
             p.multiply_opacity(1.0 - leave);
             widgets::card_on(&p, r, 0.0);
-            // Order entry prefixes its toasts (`+` filled/ok, `!` rejected); everything else
-            // is a Congress alert.
-            let (title, msg, color) = match msg.strip_prefix(super::trading::TOAST_PREFIX) {
-                Some(rest) => match rest.split_at_checked(1) {
-                    Some(("+", m)) => ("Trading", m, theme::up()),
-                    Some(("!", m)) => ("Trading · not done", m, theme::down()),
-                    _ => ("Trading", rest, amber()),
-                },
-                None => ("Congress Alert", msg.as_str(), amber()),
-            };
+            let (title, msg, color) = ("Congress Alert", msg.as_str(), amber());
             p.rect_filled(Rect::from_min_size(r.min + vec2(1.0, 6.0), vec2(3.0, r.height() - 12.0)), 1.5, color);
             widgets::draw_icon(
                 &p,

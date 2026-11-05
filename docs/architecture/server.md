@@ -1,6 +1,10 @@
 # Terminal data server: design
 
-Status: **draft for review**. The first server code runs on an interim public feed (see [Interim: public feed](#interim-public-feed)).
+Status: **historical draft for review**. The independent Terminal application is now
+**analysis-only** (2026-11-05): all trading/wallet/order-submit modules were removed.
+References below to old trading modules describe superseded designs, not current
+program behavior. The public market-data feed remains read-only.
+The first server code runs on an interim public feed (see [Interim: public feed](#interim-public-feed)).
 Author: Grok Bot, for Micky. Research date: 2026-10-29. Times are UTC unless marked.
 
 Terminal today fetches all of its own data: Yahoo, Binance and Coinbase websockets, Treasury.gov, Senate eFD and the House Clerk, and SnapTrade. Each desktop process opens its own connections. The browser build serves sample data wherever a source blocks cross-origin requests (`TODO(web proxy)` in `crates/data/src/web.rs` and `crates/congress/src/db_web.rs`). This doc proposes the replacement Micky asked for: **one Rust server that every client (desktop, web, later mobile) connects to, so market data and user state sync in real time**. Hyperliquid is the first market-data source, and the design leaves a clean provider interface for licensed equities and options later.

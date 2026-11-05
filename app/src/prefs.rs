@@ -194,83 +194,6 @@ impl Default for PanelDefaults {
     }
 }
 
-/// Which account the terminal trades and shows: the local paper-trading demo account, or
-/// the real brokerage accounts connected through SnapTrade.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum AccountMode {
-    #[default]
-    Demo,
-    Live,
-}
-
-/// Order entry. The demo account is selected by default and trades without any setup;
-/// switching to live accounts is an explicit choice that is remembered. Sending live orders
-/// additionally needs `enabled`, which takes an explicit acknowledgement that orders are real.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TradingPrefs {
-    pub account_mode: AccountMode,
-    /// Live orders may be sent (Settings › Trading).
-    pub enabled: bool,
-    /// Refuse orders whose estimated value exceeds this (`None` = no limit).
-    pub max_order_value: Option<f64>,
-    /// Account the ticket preselects.
-    pub default_account: Option<String>,
-    /// Hyperliquid (testnet only in this build), with its own opt-in.
-    pub hl: HlPrefs,
-}
-
-/// Hyperliquid order entry. Separate from SnapTrade's `enabled`: turning one on never turns on
-/// the other. Holds only public data: the agent's private key lives in the OS secret store.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct HlPrefs {
-    /// Orders may be signed and sent (after the acknowledgement dialog). Off by default, and
-    /// turned off again by the kill switch.
-    pub enabled: bool,
-    /// Always testnet: any stored value (`"mainnet"` included) reads as testnet.
-    pub network: tr_hl::Network,
-    /// The account (master address) shown in the portfolio panes, read-only until an agent
-    /// is approved.
-    pub master: Option<String>,
-    /// The approved agent's public details (never its key).
-    pub agent: Option<HlAgent>,
-    /// The built-in wallet, once signed in (its address is `master`). Public details only:
-    /// Turnkey holds the wallet's key, and the session lives in the OS secret store.
-    pub wallet: Option<HlWallet>,
-    /// Keep a `scheduleCancel` about a minute ahead while the app is open, so open orders are
-    /// cancelled if Terminal disappears. Opt-in: it cancels orders placed elsewhere too.
-    pub dead_mans_switch: bool,
-    /// Web only: keep the agent key in this browser (encrypted with a key the page can't
-    /// export) instead of only for the session.
-    pub remember_on_browser: bool,
-}
-
-/// The user's built-in wallet on Turnkey, as Terminal remembers it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HlWallet {
-    /// Lower-case `0x…`: the Hyperliquid account.
-    pub address: String,
-    /// The user's Turnkey sub-organization.
-    pub organization_id: String,
-    /// Turnkey's name for the user (`whoami`), shown so a wrong account is noticed.
-    #[serde(default)]
-    pub user: String,
-}
-
-/// An approved API wallet, as Terminal remembers it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HlAgent {
-    /// Lower-case `0x…`.
-    pub address: String,
-    /// `terminal-<device> valid_until <ms>`.
-    pub name: String,
-    /// Expiry, Unix milliseconds.
-    pub valid_until: u64,
-    #[serde(default)]
-    pub network: tr_hl::Network,
-}
-
 /// Every rebindable action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Action {
@@ -284,7 +207,9 @@ pub enum Action {
     Portfolio,
     Positions,
     Orders,
+    /// Legacy saved hotkey: ignored in analysis-only builds.
     Buy,
+    /// Legacy saved hotkey: ignored in analysis-only builds.
     Sell,
     TogglePerp,
     NextPane,
@@ -330,7 +255,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 53] = [
+    pub const ALL: [Action; 51] = [
         Action::Help,
         Action::Congress,
         Action::Politicians,
@@ -341,8 +266,6 @@ impl Action {
         Action::Portfolio,
         Action::Positions,
         Action::Orders,
-        Action::Buy,
-        Action::Sell,
         Action::TogglePerp,
         Action::NextPane,
         Action::PrevPane,
@@ -398,8 +321,7 @@ impl Action {
             Action::Portfolio => "Brokerage portfolio".into(),
             Action::Positions => "Brokerage positions".into(),
             Action::Orders => "Brokerage orders".into(),
-            Action::Buy => "Buy the current security".into(),
-            Action::Sell => "Sell the current security".into(),
+            Action::Buy | Action::Sell => "Unavailable (read-only terminal)".into(),
             Action::TogglePerp => "Switch between a security and its HIP-3 perp".into(),
             Action::NextPane => "Next pane".into(),
             Action::PrevPane => "Previous pane".into(),
@@ -462,13 +384,12 @@ impl Action {
             | A::ResetView
             | A::LogScale
             | A::Magnet => "Chart",
-            A::Buy | A::Sell => "Trading",
+            A::Buy | A::Sell => "Unavailable",
             _ => "Panels and data",
         }
     }
 
-    pub const CATEGORIES: [&'static str; 6] =
-        ["New panels", "Panels and data", "Trading", "Workspace", "Layouts", "Chart"];
+    pub const CATEGORIES: [&'static str; 5] = ["New panels", "Panels and data", "Workspace", "Layouts", "Chart"];
 
     /// The panel command word for `New…` actions.
     pub fn panel_spec(self) -> Option<&'static str> {
@@ -638,9 +559,7 @@ impl Default for Keymap {
         bind(Action::Portfolio, "F7");
         bind(Action::Positions, "F8");
         bind(Action::Orders, "F9");
-        // Shift keeps plain typing free for the type-anywhere command line.
-        bind(Action::Buy, "Shift+B");
-        bind(Action::Sell, "Shift+S");
+        // Trade hotkeys are intentionally absent from new read-only preferences.
         bind(Action::TogglePerp, "Shift+P");
         bind(Action::NextPane, "Tab");
         bind(Action::PrevPane, "Shift+Tab");
@@ -719,8 +638,6 @@ pub struct Prefs {
     pub appearance: Appearance,
     pub hotkeys: Keymap,
     pub panels: PanelDefaults,
-    /// Order entry through SnapTrade (off unless the user turns it on).
-    pub trading: TradingPrefs,
     /// A custom theme built from v2 appearance overrides, for the app to save.
     #[serde(skip)]
     pub migrated_theme: Option<crate::themes::Theme>,
@@ -733,7 +650,6 @@ impl Default for Prefs {
             appearance: Appearance::default(),
             hotkeys: Keymap::default(),
             panels: PanelDefaults::default(),
-            trading: TradingPrefs::default(),
             migrated_theme: None,
         }
     }
@@ -899,25 +815,12 @@ mod tests {
     }
 
     #[test]
-    fn hyperliquid_prefs_never_select_mainnet() {
-        // A hand-edited or future file asking for mainnet still loads as testnet, and the rest
-        // of the preferences survive.
-        let json = r#"{"appearance":{"theme":"Nord"},"trading":{"enabled":true,"hl":{"enabled":true,"network":"mainnet",
-            "master":"0xabc","agent":{"address":"0xdef","name":"terminal-mac valid_until 1","valid_until":1,"network":"Mainnet"}}}}"#;
+    fn legacy_trading_preferences_are_ignored() {
+        let json =
+            r#"{"appearance":{"theme":"Nord"},"trading":{"enabled":true,"hl":{"enabled":true,"network":"mainnet"}}}"#;
         let p: Prefs = serde_json::from_str(json).unwrap();
-        assert_eq!(p.trading.hl.network, tr_hl::Network::Testnet);
-        assert_eq!(p.trading.hl.agent.as_ref().unwrap().network, tr_hl::Network::Testnet);
-        assert!(p.trading.hl.enabled && p.trading.enabled);
-        assert_eq!(p.appearance.theme, "Nord", "the rest of the file still loads");
-        for v in ["\"MAINNET\"", "\"a\"", "7", "null", "[]"] {
-            let p: Prefs = serde_json::from_str(&format!(r#"{{"trading":{{"hl":{{"network":{v}}}}}}}"#)).unwrap();
-            assert_eq!(p.trading.hl.network, tr_hl::Network::Testnet, "{v}");
-        }
-        // Off by default, opt-in switches off, nothing secret in the file.
-        let d = Prefs::default().trading.hl;
-        assert!(!d.enabled && !d.dead_mans_switch && !d.remember_on_browser && d.agent.is_none());
-        let saved = serde_json::to_string(&p).unwrap();
-        assert!(saved.contains(r#""network":"Testnet""#) && !saved.contains("ainnet"), "{saved}");
+        assert_eq!(p.appearance.theme, "Nord");
+        assert!(!serde_json::to_string(&p).unwrap().contains("\"trading\""));
     }
 
     #[test]

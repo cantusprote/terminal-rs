@@ -24,27 +24,6 @@ pub enum PortAction {
     /// `OMON` for a market key.
     Options(String),
     News(String),
-    /// Open the order ticket for a market key, optionally in an account with a quantity.
-    Trade {
-        key: String,
-        buy: bool,
-        account: Option<String>,
-        units: Option<f64>,
-    },
-    /// Ask to cancel an open order (confirmed in a dialog for live accounts).
-    CancelOrder {
-        account: String,
-        id: String,
-    },
-    /// Open Settings › Trading.
-    TradingSettings,
-    /// Sell a whole position (at once in the demo account; through the ticket live).
-    ClosePosition {
-        account: String,
-        key: String,
-    },
-    /// The Hyperliquid kill switch (`KILL`).
-    Kill,
 }
 
 // ---- formatting ---------------------------------------------------------------------------
@@ -231,29 +210,6 @@ fn note(ui: &mut Ui, s: impl Into<String>) {
     ui.label(RichText::new(s.into()).font(ui_font(11.5)).color(muted()));
 }
 
-/// Buy/Sell items for a security row (the ticket says whether trading is enabled).
-fn trade_items(ui: &mut Ui, key: &str, account: Option<&str>, held: Option<f64>, out: &mut Vec<PortAction>) {
-    let sec = tr_data::security(key);
-    if !matches!(sec.class, tr_core::AssetClass::Equity | tr_core::AssetClass::Etf) {
-        return;
-    }
-    let account = account.map(str::to_string);
-    if ui.button(format!("Buy {}…", sec.ticker)).clicked() {
-        out.push(PortAction::Trade { key: key.to_string(), buy: true, account: account.clone(), units: None });
-        ui.close();
-    }
-    let units = held.filter(|u| *u > 0.0);
-    let sell = match units {
-        Some(u) => format!("Sell {} {}…", qty(u), sec.ticker),
-        None => format!("Sell {}…", sec.ticker),
-    };
-    if ui.button(sell).clicked() {
-        out.push(PortAction::Trade { key: key.to_string(), buy: false, account, units });
-        ui.close();
-    }
-    ui.separator();
-}
-
 /// Right-click menu for a security row.
 fn security_menu(ui: &mut Ui, key: &str, symbol: &str, out: &mut Vec<PortAction>) {
     if ui.button("Open Chart").clicked() {
@@ -288,7 +244,7 @@ fn security_menu(ui: &mut Ui, key: &str, symbol: &str, out: &mut Vec<PortAction>
 
 // ---- pane ---------------------------------------------------------------------------------
 
-/// A portfolio pane. `demo` is the demo account's portfolio when it is the selected account;
+/// A portfolio pane. `demo` is an optional offline sample portfolio;
 /// otherwise the pane shows the brokerage (live or sample) from `b`.
 pub fn portfolio(
     ui: &mut Ui,
@@ -296,7 +252,7 @@ pub fn portfolio(
     b: &BrokerState,
     demo: Option<&Portfolio>,
     quotes: &HashMap<String, Quote>,
-    testnet: &HashMap<String, f64>,
+    _testnet: &HashMap<String, f64>,
 ) -> Vec<PortAction> {
     let mut out = Vec::new();
     toolbar(ui, pane, b, demo, &mut out);
@@ -331,7 +287,7 @@ pub fn portfolio(
             if pane.account.as_ref().is_some_and(|a| pf.account(a).is_none()) {
                 pane.account = None;
             }
-            let price_of = |p: &Position| super::broker::live_price(quotes, testnet, p);
+            let price_of = |p: &Position| super::broker::live_price(quotes, p);
             match pane.view {
                 PortView::Summary => {
                     egui::ScrollArea::vertical()
@@ -374,17 +330,7 @@ fn toolbar(
             pane.view = PortView::ALL[i];
         }
         if demo.is_some() {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(ui, widgets::Icon::Gear, "Trading settings: demo account, live accounts", false)
-                    .clicked()
-                {
-                    out.push(PortAction::TradingSettings);
-                }
-                ui.label(RichText::new("Paper trading · virtual cash").font(ui_font(11.0)).color(muted()));
-                super::trading::mode_badge(ui, false)
-                    .on_hover_text("The demo account is selected. Switch to live accounts from the toolbar badge.");
-            });
-            return;
+            note(ui, "Sample portfolio · monitoring only");
         }
         if let Some(pf) = b.portfolio.as_deref()
             && pf.accounts.len() > 1
@@ -459,7 +405,7 @@ fn setup_screen(ui: &mut Ui, b: &BrokerState, out: &mut Vec<PortAction>) {
     note(
         ui,
         "Terminal reads accounts, balances, positions, orders and activity through SnapTrade. Access is read-only \
-         unless you turn on trading in Settings › Trading.",
+         read-only: orders cannot be placed or cancelled in Terminal.",
     );
     ui.add_space(dp(8.0));
     let step = |ui: &mut Ui, n: &str, title: &str, body: &str, done: bool| {
@@ -733,64 +679,10 @@ fn position_row(
         (None, _) => resp.on_hover_text("Not available as a terminal market key"),
     };
     if let Some(k) = &key {
-        // Hyperliquid perps trade on their own account; a short closes too (reduce-only).
-        let perp = super::hl::is_hl_account(&p.account_id) && p.market.is_some();
-        let tradable = perp
-            || (matches!(p.kind, tr_broker::InstrumentKind::Stock | tr_broker::InstrumentKind::Etf)
-                && matches!(tr_data::security(k).class, tr_core::AssetClass::Equity | tr_core::AssetClass::Etf));
-        let mut pills = Vec::new();
-        if tradable {
-            pills.extend(widgets::buy_sell_pills());
-            if p.units > 0.0 || (perp && p.units != 0.0) {
-                pills.push(("Close", theme::control(), text()));
-            }
+        if resp.clicked() {
+            out.push(PortAction::Core(Action::OpenChart(k.clone())));
         }
-        let tips = if perp {
-            [
-                "Buy (Hyperliquid testnet)",
-                "Sell (Hyperliquid testnet)",
-                "Close: a reduce-only market order for all of it",
-            ]
-        } else {
-            ["Buy more (⇧B)", "Sell (⇧S)", "Close: sell the whole position"]
-        };
-        let pill = widgets::row_pills(ui, r, ("pos-pills", &p.account_id, &p.symbol), &pills, &tips);
-        match pill {
-            Some(0) => out.push(PortAction::Trade {
-                key: k.clone(),
-                buy: true,
-                account: Some(p.account_id.clone()),
-                units: None,
-            }),
-            Some(1) => out.push(PortAction::Trade {
-                key: k.clone(),
-                buy: false,
-                account: Some(p.account_id.clone()),
-                units: None,
-            }),
-            Some(_) => out.push(PortAction::ClosePosition { account: p.account_id.clone(), key: k.clone() }),
-            None if resp.clicked() => out.push(PortAction::Core(Action::OpenChart(k.clone()))),
-            None => {}
-        }
-        resp.context_menu(|ui| {
-            if perp {
-                if ui.button(format!("Close Position ({} {})…", qty(p.units), p.short_label())).clicked() {
-                    out.push(PortAction::ClosePosition { account: p.account_id.clone(), key: k.clone() });
-                    ui.close();
-                }
-                ui.separator();
-            } else if p.kind != tr_broker::InstrumentKind::Option {
-                trade_items(ui, k, Some(&p.account_id), Some(p.units), out);
-                if tradable && p.units > 0.0 {
-                    if ui.button(format!("Close Position ({} {})…", qty(p.units), p.short_label())).clicked() {
-                        out.push(PortAction::ClosePosition { account: p.account_id.clone(), key: k.clone() });
-                        ui.close();
-                    }
-                    ui.separator();
-                }
-            }
-            security_menu(ui, k, &p.symbol, out)
-        });
+        resp.context_menu(|ui| security_menu(ui, k, &p.symbol, out));
     }
 }
 
@@ -965,29 +857,10 @@ fn orders(ui: &mut Ui, pane: &mut PortfolioPane, pf: &Portfolio, out: &mut Vec<P
         if let Some(i) = widgets::segmented(ui, "port-orders", &["Open", "All"], sel, 20.0) {
             pane.open_only = i == 0;
         }
-        if pf.accounts.iter().any(|a| super::hl::is_hl_account(&a.id)) {
-            let b = egui::Button::new(RichText::new("KILL").font(mono(11.5)).strong().color(Color32::WHITE))
-                .fill(theme::down());
-            if ui
-                .add(b)
-                .on_hover_text(
-                    "Kill switch: cancel every open Hyperliquid testnet order and turn Hyperliquid orders off",
-                )
-                .clicked()
-            {
-                out.push(PortAction::Kill);
-            }
-        }
         if pf.demo {
-            note(ui, "Demo orders · hover an open order to cancel it");
+            note(ui, "Sample order history · read only");
         } else {
-            note(
-                ui,
-                format!(
-                    "Last {} days · hover or right-click an open order to cancel it",
-                    tr_broker::snaptrade::ORDER_DAYS
-                ),
-            );
+            note(ui, format!("Last {} days · read-only order history", tr_broker::snaptrade::ORDER_DAYS));
         }
     });
     let sel = selected(pane);
@@ -1061,25 +934,13 @@ fn orders(ui: &mut Ui, pane: &mut PortfolioPane, pf: &Portfolio, out: &mut Vec<P
                 );
             }
             let key = o.market_key();
-            let cancellable = o.is_open() && !o.id.is_empty();
-            let pills: &[widgets::Pill<'_>] =
-                if cancellable { &[("Cancel", theme::down(), Color32::WHITE)] } else { &[] };
-            if widgets::row_pills(ui, r, ("ord-pill", &o.account_id, &o.id), pills, &["Cancel this order"]).is_some() {
-                out.push(PortAction::CancelOrder { account: o.account_id.clone(), id: o.id.clone() });
-            } else if let Some(k) = &key
+            if let Some(k) = &key
                 && resp.clicked()
             {
                 out.push(PortAction::Core(Action::OpenChart(k.clone())));
             }
-            if cancellable || key.is_some() {
+            if key.is_some() {
                 resp.context_menu(|ui| {
-                    if cancellable {
-                        if ui.button(RichText::new("Cancel Order…").color(theme::down())).clicked() {
-                            out.push(PortAction::CancelOrder { account: o.account_id.clone(), id: o.id.clone() });
-                            ui.close();
-                        }
-                        ui.separator();
-                    }
                     if let Some(k) = &key {
                         security_menu(ui, k, &o.symbol, out);
                     }
@@ -1227,8 +1088,8 @@ mod tests {
             });
             out.textures_delta.clear();
         }
-        // The demo account.
-        let demo = tr_broker::demo::DemoBook::new(chrono::Utc::now()).portfolio();
+        // An offline sample portfolio for rendering tests.
+        let demo = tr_broker::sample::portfolio();
         for view in PortView::ALL {
             let mut pane = PortfolioPane::new(view);
             let mut out = ctx.run_ui(Default::default(), |ui| {

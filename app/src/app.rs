@@ -6,12 +6,6 @@
 
 mod broker;
 mod chrome;
-mod demo;
-mod hl;
-pub(crate) use hl::store_account as hl_store_account;
-mod hl_view;
-#[cfg(target_arch = "wasm32")]
-mod hl_web;
 mod hotkeys_view;
 mod options_view;
 mod palette_view;
@@ -19,9 +13,6 @@ mod panels;
 mod portfolio_view;
 mod settings_view;
 mod theming;
-mod trading;
-mod wallet;
-mod wallet_view;
 mod workspace;
 
 pub use broker::PosSort;
@@ -556,12 +547,6 @@ pub struct TerminalApp {
     last_chrome_poll: Option<Instant>,
     /// Brokerage integration (SnapTrade credentials and the loaded portfolio).
     broker: broker::BrokerState,
-    /// Order ticket and trading dialogs.
-    trading: trading::TradingState,
-    /// The paper-trading demo account (selected by default).
-    demo: demo::DemoState,
-    /// Hyperliquid (testnet): the account, the agent key and its confirmations.
-    hl: hl::HlState,
     /// ⌘K command palette.
     palette: crate::palette::Palette,
 }
@@ -632,12 +617,8 @@ impl TerminalApp {
         let settings: Option<Settings> =
             crate::storage::read(&settings_path()).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let broker = broker::BrokerState::load(provider.eq_ignore_ascii_case("sample"));
-        let (demo, demo_note) = demo::DemoState::load(demo::demo_path());
         let mut app = Self {
             broker,
-            trading: Default::default(),
-            demo,
-            hl: hl::HlState::platform(),
             worker,
             provider,
             panes: Vec::new(),
@@ -737,17 +718,9 @@ impl TerminalApp {
             app.save_layout();
         }
         app.refresh_layout_names();
-        #[cfg(target_arch = "wasm32")]
-        {
-            app.hl.ctx = Some(ctx.clone());
-        }
-        app.hl_start();
         app.worker.send(Request::Latest { limit: 2_000 });
         app.worker.send(Request::SearchPoliticians(String::new()));
         app.worker.send(Request::Alerts);
-        if let Some(note) = demo_note {
-            app.trade_toast(note, false);
-        }
         app
     }
 
@@ -848,10 +821,6 @@ impl TerminalApp {
             }
             Command::SymbolFunction(s, Function::Portfolio(view, arg)) => self.portfolio_command(view, &arg, Some(s)),
             Command::SymbolFunction(s, Function::Perp) => self.open_perp(Some(s)),
-            Command::SymbolFunction(s, Function::Trade(mut t)) => {
-                t.symbol = Some(s);
-                self.open_ticket(t, None);
-            }
             Command::SymbolFunction(s, f @ (Function::NewPanel(_) | Function::Split { .. })) => {
                 self.apply_with_symbol(f, Some(s));
             }
@@ -994,15 +963,6 @@ impl TerminalApp {
                 self.open_panel(PaneKind::Search { query: q });
             }
             Function::Portfolio(view, arg) => self.portfolio_command(view, &arg, None),
-            Function::Trade(t) => self.open_ticket(t, None),
-            Function::AccountMode(live) => {
-                let mode = if live { prefs::AccountMode::Live } else { prefs::AccountMode::Demo };
-                if mode == self.prefs.trading.account_mode {
-                    self.status = format!("Already using the {} account", if live { "LIVE" } else { "DEMO" });
-                }
-                self.set_account_mode(mode, false);
-            }
-            Function::Kill => self.hl_kill(),
             Function::Perp => {
                 let key = symbol.or_else(|| self.focused_symbol());
                 self.open_perp(key);
@@ -1072,8 +1032,7 @@ impl TerminalApp {
                     if quotes.len() > 20 {
                         self.wei_updated = Some(format!("updated {}", chrono::Local::now().format("%H:%M:%S")));
                     }
-                    let keys = merge_quotes(&mut self.quotes, &asked, quotes);
-                    self.demo_on_quotes(&keys);
+                    merge_quotes(&mut self.quotes, &asked, quotes);
                 }
                 Response::Latest(t) => self.latest = t,
                 Response::TickerTrades { pane, symbol, trades } => {
@@ -1151,10 +1110,7 @@ impl TerminalApp {
                         b.trades = trades.unwrap_or_default();
                     }
                 }
-                Response::Portfolio(result) => {
-                    let result = self.keep_simulated_trades(result);
-                    self.on_portfolio(result)
-                }
+                Response::Portfolio(result) => self.on_portfolio(result),
                 Response::BrokerRegistered(result) => self.on_broker_registered(result),
                 Response::BrokerPortal(result) => self.on_broker_portal(result),
                 Response::BrokerDisconnected(result) => self.on_broker_disconnected(result),
@@ -1181,8 +1137,6 @@ impl TerminalApp {
                         *answered = ok;
                     }
                 }
-                Response::Trade(r) => self.on_trade(*r),
-                Response::Hl(r) => self.on_hl(*r),
                 Response::CongressRefreshed(summary) => {
                     self.congress_status = summary.to_string();
                     self.congress_checked = Some(chrono::Local::now());
@@ -1404,8 +1358,8 @@ impl TerminalApp {
             A::Portfolio => self.apply(Function::Portfolio(command::PortView::Summary, String::new())),
             A::Positions => self.apply(Function::Portfolio(command::PortView::Positions, String::new())),
             A::Orders => self.apply(Function::Portfolio(command::PortView::Orders, String::new())),
-            A::Buy => self.quick_trade(true),
-            A::Sell => self.quick_trade(false),
+            // Historical user keybindings are deliberately inert.
+            A::Buy | A::Sell => {}
             A::TogglePerp => self.apply(Function::Perp),
             A::NextPane => self.cycle_focus(1),
             A::PrevPane => self.cycle_focus(-1),
@@ -1504,7 +1458,6 @@ impl TerminalApp {
                 _ => {}
             }
         }
-        self.hl_periodic();
         self.broker_periodic(&visible);
         if let Some((q, at)) = &self.search_pending
             && at.elapsed() > Duration::from_millis(300)
@@ -1673,7 +1626,6 @@ impl eframe::App for TerminalApp {
         actions.extend(self.render_dock(ui, area, gap));
         actions.extend(self.render_windows(&ctx));
         self.run_actions(actions);
-        self.trading_windows(&ctx);
         self.toasts(&ctx);
 
         // TR_SMOKE_SECS=N: render for N seconds, log frame stats and quit (CI smoke test).
@@ -1715,9 +1667,6 @@ impl eframe::App for TerminalApp {
 
     fn on_exit(&mut self) {
         self.autosave();
-        if self.demo.save_error.is_some() {
-            self.demo.save();
-        }
     }
 }
 

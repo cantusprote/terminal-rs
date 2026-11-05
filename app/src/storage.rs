@@ -1,4 +1,4 @@
-//! Where preferences, settings, layouts, themes, palette history and the demo account are
+//! Where preferences, settings, layouts, themes and palette history are
 //! kept: files under the data directory on the desktop, `localStorage` entries keyed by path
 //! in the browser. Every saved document is UTF-8 text (JSON or TOML).
 //!
@@ -146,6 +146,7 @@ mod imp {
         std::fs::remove_file(path)
     }
 
+    #[allow(dead_code)]
     pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
         std::fs::rename(from, to)
     }

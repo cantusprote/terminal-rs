@@ -88,9 +88,14 @@ impl TerminalApp {
                 }
             }
             PaneKind::Portfolio(pp) => {
-                let demo =
-                    (self.prefs.trading.account_mode == crate::prefs::AccountMode::Demo).then_some(&*self.demo.pf);
-                for a in super::portfolio_view::portfolio(ui, pp, &self.broker, demo, &self.quotes, &self.hl.mids) {
+                for a in super::portfolio_view::portfolio(
+                    ui,
+                    pp,
+                    &self.broker,
+                    None,
+                    &self.quotes,
+                    &std::collections::HashMap::new(),
+                ) {
                     use super::portfolio_view::PortAction as P;
                     match a {
                         P::Core(a) => actions.push(a),
@@ -99,22 +104,6 @@ impl TerminalApp {
                         P::Setup => actions.push(Action::Command("PORT SETUP".into())),
                         P::Options(k) => actions.push(Action::Command(format!("{k} OMON"))),
                         P::News(k) => actions.push(Action::Command(format!("{k} CN"))),
-                        P::Trade { key, buy, account, units } => self.open_ticket(
-                            crate::command::TradeArgs {
-                                buy: Some(buy),
-                                symbol: Some(key),
-                                units,
-                                ..Default::default()
-                            },
-                            account,
-                        ),
-                        P::CancelOrder { account, id } => self.request_cancel(&account, &id),
-                        P::ClosePosition { account, key } => self.close_position(&account, &key),
-                        P::Kill => self.hl_kill(),
-                        P::TradingSettings => {
-                            self.settings_tab = super::settings_view::SettingsTab::Trading;
-                            self.open_panel(PaneKind::Settings);
-                        }
                         P::Open(url) => {
                             if let Err(e) = super::broker::open_external(url) {
                                 self.status = format!("Could not open {url}: {e}");
@@ -195,25 +184,10 @@ impl TerminalApp {
                         p.text(pos2(col(r, 4), r.center().y), Align2::RIGHT_CENTER, "…", mono(12.5), muted());
                     }
                 }
-                let tradable = matches!(sec.class, tr_core::AssetClass::Equity | tr_core::AssetClass::Etf);
-                let pills = if tradable { widgets::buy_sell_pills().to_vec() } else { Vec::new() };
-                let tips = [format!("Buy {} (⇧B)", sec.ticker), format!("Sell {} (⇧S)", sec.ticker)];
-                let tips: Vec<&str> = tips.iter().map(String::as_str).collect();
-                match widgets::row_pills(ui, r, ("wl-pills", s), &pills, &tips) {
-                    Some(i) => out.push(Action::Command(format!("{} {s}", if i == 0 { "BUY" } else { "SELL" }))),
-                    None if resp.clicked() => out.push(Action::OpenChart(s.clone())),
-                    None => {}
+                if resp.clicked() {
+                    out.push(Action::OpenChart(s.clone()));
                 }
                 resp.context_menu(|ui| {
-                    if tradable {
-                        for (label, side) in [("Buy", "BUY"), ("Sell", "SELL")] {
-                            if ui.button(format!("{label} {}…", sec.ticker)).clicked() {
-                                out.push(Action::Command(format!("{side} {s}")));
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                    }
                     if ui.button("Open Chart").clicked() {
                         out.push(Action::OpenChart(s.clone()));
                         ui.close();

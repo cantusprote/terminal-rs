@@ -1,6 +1,6 @@
 [package]
 name = "terminal"
-description = "Bloomberg-style trading terminal with GPU charts and congressional trade tracking"
+description = "Read-only Bloomberg-style market research terminal with GPU charts and congressional trade tracking"
 version.workspace = true
 edition.workspace = true
 default-run = "terminal"
@@ -13,8 +13,6 @@ webgl = ["eframe/wgpu"]
 [dependencies]
 tr-core.workspace = true
 tr-broker.workspace = true
-tr-hl.workspace = true
-tr-turnkey.workspace = true
 tr-congress.workspace = true
 tr-data.workspace = true
 tr-chart.workspace = true
@@ -25,13 +23,10 @@ serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
 futures = "0.3"
-zeroize = "1"
 egui = { version = "0.36", default-features = false }
 eframe = { version = "0.36", default-features = false, features = ["wgpu_no_default_features", "wayland", "x11"] }
 tr-macos.workspace = true
 web-time = "1"
-# The Deposit window's QR code (no image dependencies).
-qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts"] }
@@ -72,4 +67,3 @@ web-sys = { version = "0.3", features = [
 
 [dev-dependencies]
 async-trait = "0.1"
-tr-turnkey = { workspace = true, features = ["mock"] }

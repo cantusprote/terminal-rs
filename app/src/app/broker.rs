@@ -156,24 +156,13 @@ impl BrokerState {
     }
 }
 
-/// The terminal's own price for a position, from the network the position is on: testnet
-/// mids for Hyperliquid testnet rows, the Terminal server's (mainnet) quotes for everything
-/// else. Both use the same market keys (`xyz:AAPL`), so a row never falls back to the other
-/// map. Options are never repriced from their underlying.
-pub fn live_price(
-    quotes: &std::collections::HashMap<String, tr_data::Quote>,
-    testnet: &std::collections::HashMap<String, f64>,
-    p: &Position,
-) -> Option<f64> {
+/// The terminal's market quote for a brokerage position (read-only).
+pub fn live_price(quotes: &std::collections::HashMap<String, tr_data::Quote>, p: &Position) -> Option<f64> {
     if p.kind == tr_broker::InstrumentKind::Option {
         return None;
     }
     let key = p.market_key()?;
-    let px = if super::hl::is_testnet_account(&p.account_id) {
-        testnet.get(&key).copied()
-    } else {
-        quotes.get(&key).map(|q| q.last)
-    };
+    let px = quotes.get(&key).map(|q| q.last);
     px.filter(|x| x.is_finite() && *x > 0.0)
 }
 
@@ -210,6 +199,16 @@ pub fn new_user_id() -> String {
 }
 
 impl TerminalApp {
+    /// Only the connected (read-only) brokerage portfolio or offline sample.
+    pub(super) fn shown_portfolio(&self) -> Option<&Portfolio> {
+        self.broker.portfolio.as_deref()
+    }
+
+    pub(super) fn brokerage_access_note(&self) -> String {
+        "Read-only: accounts, balances, positions, historical orders and activity. +         Terminal cannot submit, cancel or sign trades."
+            .into()
+    }
+
     /// Request a portfolio load now.
     pub(super) fn refresh_portfolio(&mut self) {
         let b = &mut self.broker;
@@ -232,22 +231,17 @@ impl TerminalApp {
         let b = &self.broker;
         let connecting = b.connecting_since.is_some_and(|t| t.elapsed() < CONNECT_WINDOW);
         let every = if connecting { CONNECT_POLL } else { REFRESH };
-        // The demo account is local: live accounts load only while they are shown.
-        let live = !self.demo_mode();
-        if live && !b.loading && b.mode() != BrokerMode::Setup && b.fetched.is_none_or(|t| t.elapsed() > every) {
+        if !b.loading && b.mode() != BrokerMode::Setup && b.fetched.is_none_or(|t| t.elapsed() > every) {
             self.refresh_portfolio();
         }
         // Reprice holdings with the terminal's own quotes.
         if let Some(pf) = self.shown_portfolio()
             && self.broker.last_quotes.is_none_or(|t| t.elapsed() > Duration::from_secs(20))
         {
-            // Testnet rows price from testnet mids (the Hyperliquid stream), never the server.
             let mut keys: Vec<String> = pf
                 .positions
                 .iter()
-                .filter(|p| {
-                    p.kind != tr_broker::InstrumentKind::Option && !super::hl::is_testnet_account(&p.account_id)
-                })
+                .filter(|p| p.kind != tr_broker::InstrumentKind::Option)
                 .filter_map(Position::market_key)
                 .collect();
             keys.sort();
@@ -460,10 +454,7 @@ impl TerminalApp {
     pub(super) fn portfolio_command(&mut self, view: PortView, arg: &str, symbol: Option<String>) {
         match arg.trim() {
             "REFRESH" | "SYNC" | "RELOAD" => {
-                if self.demo_mode() {
-                    self.status =
-                        "The demo account is local and always current (MODE LIVE for brokerage accounts)".into();
-                } else if self.broker.mode() == BrokerMode::Setup {
+                if self.broker.mode() == BrokerMode::Setup {
                     self.status = "Brokerage not set up: PORT SETUP".into();
                 } else {
                     self.refresh_portfolio();
@@ -479,7 +470,7 @@ impl TerminalApp {
         let mut pane = PortfolioPane::new(view);
         pane.symbol = symbol;
         self.open_panel(PaneKind::Portfolio(Box::new(pane)));
-        if !self.demo_mode() && self.broker.portfolio.is_none() && !self.broker.loading {
+        if self.broker.portfolio.is_none() && !self.broker.loading {
             self.refresh_portfolio();
         }
     }
@@ -825,10 +816,8 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    /// A Hyperliquid testnet row and a mainnet row on the same key (`xyz:AAPL`) with mainnet
-    /// and testnet updates arriving interleaved: each reads only its own network's price.
     #[test]
-    fn testnet_rows_never_read_mainnet_quotes() {
+    fn readonly_position_uses_market_quotes_only() {
         let quote =
             |last: f64| tr_data::Quote { symbol: "xyz:AAPL".into(), last, prev_close: last, ts: 0, spark: Vec::new() };
         let row = |account: &str| Position {
@@ -845,20 +834,13 @@ mod tests {
             underlying: None,
             market: Some("xyz:AAPL".into()),
         };
-        let testnet = row("hl:testnet:0x00000000000000000000000000000000000f107e");
-        let mainnet = row("mainnet-account");
+        let position = row("broker-account");
         let mut quotes = std::collections::HashMap::new();
-        let mut mids = std::collections::HashMap::new();
-        for (main, test) in [(230.0, 322.0), (231.0, 321.5), (229.5, 323.0)] {
-            quotes.insert("xyz:AAPL".to_string(), quote(main));
-            assert_eq!(live_price(&quotes, &mids, &testnet).is_some(), mids.contains_key("xyz:AAPL"));
-            mids.insert("xyz:AAPL".to_string(), test);
-            assert_eq!(live_price(&quotes, &mids, &testnet), Some(test), "the testnet row reads the testnet mid");
-            assert_eq!(live_price(&quotes, &mids, &mainnet), Some(main), "the mainnet row reads the gateway quote");
+        assert_eq!(live_price(&quotes, &position), None);
+        for value in [230.0, 231.0, 229.5] {
+            quotes.insert("xyz:AAPL".to_string(), quote(value));
+            assert_eq!(live_price(&quotes, &position), Some(value));
         }
-        // With only the other network's price, neither row borrows it.
-        assert_eq!(live_price(&quotes, &Default::default(), &testnet), None);
-        assert_eq!(live_price(&Default::default(), &mids, &mainnet), None);
     }
 
     #[test]

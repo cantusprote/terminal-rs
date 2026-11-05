@@ -52,84 +52,6 @@ impl PortView {
     }
 }
 
-/// `BUY AAPL 10`, `SELL 5 MSFT LMT 410`, `BUY NVDA $500`, `TRADE AAPL`: fields for the order
-/// ticket. A command only fills the ticket; orders are placed from the ticket after a preview
-/// and a confirmation.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct TradeArgs {
-    /// `Some(true)` buy, `Some(false)` sell, `None` the ticket's default.
-    pub buy: Option<bool>,
-    /// Market key (`AAPL US Equity`) of the security, when one was given.
-    pub symbol: Option<String>,
-    pub units: Option<f64>,
-    /// Dollar amount (`$500`).
-    pub notional: Option<f64>,
-    pub limit: Option<f64>,
-    pub stop: Option<f64>,
-    /// `SELL ALL TSLA`: the whole position.
-    pub all: bool,
-}
-
-impl TradeArgs {
-    /// Parse the words after `BUY`/`SELL`/`TRADE`. Unknown words make the command invalid so
-    /// a typo never fills the ticket with something unintended.
-    fn parse(buy: Option<bool>, rest: &[&str]) -> Option<TradeArgs> {
-        let mut t = TradeArgs { buy, ..Default::default() };
-        let price =
-            |s: &str| s.trim_start_matches(['@', '$']).replace(',', "").parse::<f64>().ok().filter(|x| *x > 0.0);
-        let mut words = Vec::new();
-        let mut i = 0;
-        while i < rest.len() {
-            let w = rest[i];
-            let up = w.to_ascii_uppercase();
-            match up.as_str() {
-                "LMT" | "LIMIT" | "@" => {
-                    t.limit = Some(price(rest.get(i + 1)?)?);
-                    i += 1;
-                }
-                "STP" | "STOP" => {
-                    t.stop = Some(price(rest.get(i + 1)?)?);
-                    i += 1;
-                }
-                "MKT" | "MARKET" | "SHARES" | "SHS" | "SH" => {}
-                _ if up.starts_with('@') => t.limit = Some(price(&up)?),
-                _ if up.starts_with('$') => t.notional = Some(price(&up)?),
-                _ if up.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '.') => {
-                    if t.units.is_some() {
-                        return None;
-                    }
-                    t.units = Some(price(&up)?);
-                }
-                _ => words.push(w),
-            }
-            i += 1;
-        }
-        if t.units.is_some() && t.notional.is_some() {
-            return None;
-        }
-        // `ALL` means the whole position when another word names the security (`ALL` alone
-        // is Allstate's ticker).
-        if words.len() > 1
-            && let Some(i) = words.iter().position(|w| w.eq_ignore_ascii_case("ALL"))
-        {
-            if t.buy == Some(true) || t.units.is_some() || t.notional.is_some() {
-                return None;
-            }
-            words.remove(i);
-            t.all = true;
-            t.buy = Some(false);
-        }
-        if !words.is_empty() {
-            let (sec, used) = Security::resolve_tokens(&words)?;
-            if used != words.len() {
-                return None;
-            }
-            t.symbol = Some(sec.key());
-        }
-        Some(t)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// A market key, e.g. `BTCUSD Curncy`.
@@ -273,12 +195,6 @@ pub enum Function {
     Search(String),
     /// Brokerage portfolio view, with an optional subcommand (`REFRESH`, `CONNECT`, `SETUP`).
     Portfolio(PortView, String),
-    /// Open the order ticket (`BUY`, `SELL`, `TRADE`).
-    Trade(TradeArgs),
-    /// Switch between the demo account and live accounts (`DEMO`, `MODE LIVE`); `true` = live.
-    AccountMode(bool),
-    /// `KILL`: cancel every open Hyperliquid order and turn Hyperliquid orders off (confirmed).
-    Kill,
     /// `AAPL PERP`: open the HIP-3 perp linked to a security. Alone, or on a perp, it switches
     /// the focused pane between the two.
     Perp,
@@ -362,16 +278,8 @@ fn parse_function(head: &str, rest: &[&str]) -> Option<Function> {
         "ORD" | "ORDERS" | "BLTR" => Function::Portfolio(PortView::Orders, words().join(" ")),
         "ACTV" | "ACTIVITY" | "TXNS" | "TRANSACTIONS" => Function::Portfolio(PortView::Activity, words().join(" ")),
         "BROKER" | "BROKERAGE" | "SNAPTRADE" => Function::Portfolio(PortView::Summary, "SETUP".into()),
-        "BUY" => Function::Trade(TradeArgs::parse(Some(true), rest)?),
-        "SELL" => Function::Trade(TradeArgs::parse(Some(false), rest)?),
-        "TRADE" | "TICKET" | "EMSX" => Function::Trade(TradeArgs::parse(None, rest)?),
-        "KILL" if rest.is_empty() => Function::Kill,
-        "DEMO" | "PAPER" if rest.is_empty() => Function::AccountMode(false),
-        "MODE" => match words().join(" ").as_str() {
-            "DEMO" | "PAPER" => Function::AccountMode(false),
-            "LIVE" | "REAL" => Function::AccountMode(true),
-            _ => return None,
-        },
+        // No order-entry, trading, paper-trading or wallet commands.
+        "BUY" | "SELL" | "TRADE" | "TICKET" | "EMSX" | "KILL" | "DEMO" | "PAPER" | "MODE" => return None,
         "RANGE" => Function::Range(Range::parse(rest.first()?)?),
         "PERP" if rest.is_empty() => Function::Perp,
         // Timeframes win where spellings overlap (`1D`, `1M`); otherwise try a range (`5D`, `YTD`),
@@ -391,6 +299,15 @@ fn parse_function(head: &str, rest: &[&str]) -> Option<Function> {
 pub fn parse(input: &str) -> Option<Command> {
     let tokens: Vec<&str> = input.split_whitespace().filter(|t| !t.eq_ignore_ascii_case("<GO>")).collect();
     let (&head, rest) = tokens.split_first()?;
+    // Never interpret an old trading command as a new ticker when the
+    // corresponding execution command was removed. This also covers bare
+    // words such as BUY that security resolution would otherwise accept.
+    if matches!(
+        head.to_ascii_uppercase().as_str(),
+        "BUY" | "SELL" | "TRADE" | "TICKET" | "EMSX" | "KILL" | "DEMO" | "PAPER" | "MODE"
+    ) {
+        return None;
+    }
     // `<TICKER> <YELLOW KEY>` is always a security, even if the ticker spells a function.
     let keyed = match rest {
         [k, ..] if YellowKey::parse(k).is_some() => true,
@@ -403,21 +320,6 @@ pub fn parse(input: &str) -> Option<Command> {
     let (sec, used) = Security::resolve_tokens(&tokens)?;
     match tokens[used..].split_first() {
         None => Some(Command::Symbol(sec.key())),
-        // `TSLA SELL ALL`: the security is already named, so `ALL` is the whole position.
-        Some((&f, args))
-            if ["SELL", "TRADE"].iter().any(|h| f.eq_ignore_ascii_case(h))
-                && args.iter().any(|a| a.eq_ignore_ascii_case("ALL")) =>
-        {
-            let rest: Vec<&str> = args.iter().copied().filter(|a| !a.eq_ignore_ascii_case("ALL")).collect();
-            match parse_function(f, &rest)? {
-                Function::Trade(mut t) if t.symbol.is_none() && t.units.is_none() && t.notional.is_none() => {
-                    t.all = true;
-                    t.buy = Some(false);
-                    Some(Command::SymbolFunction(sec.key(), Function::Trade(t)))
-                }
-                _ => None,
-            }
-        }
         Some((&f, args)) => parse_function(f, args).map(|func| Command::SymbolFunction(sec.key(), func)),
     }
 }
@@ -525,38 +427,6 @@ fn describe(f: &Function) -> String {
             "CONNECT" | "LINK" => "Connect a brokerage in your browser (SnapTrade, read-only)".into(),
             _ => "Brokerage connection settings".into(),
         },
-        Function::Trade(t) => {
-            let side = match t.buy {
-                Some(true) => "Buy",
-                Some(false) => "Sell",
-                None => "Trade",
-            };
-            let mut s = format!("Order ticket: {side}");
-            if let Some(u) = t.units {
-                s += &format!(" {}", tr_broker::trading::fmt_units(u));
-            }
-            if let Some(n) = t.notional {
-                s += &format!(" ${n:.2} of");
-            }
-            if let Some(k) = &t.symbol {
-                s += &format!(" {}", Security::parse(k).map_or(k.clone(), |x| x.ticker));
-            }
-            if let Some(p) = t.stop {
-                s += &format!(" stop {p}");
-            }
-            if let Some(p) = t.limit {
-                s += &format!(" limit {p}");
-            }
-            if t.all {
-                s += " (whole position)";
-            }
-            s
-        }
-        Function::AccountMode(false) => "Switch to the DEMO account (paper trading)".into(),
-        Function::AccountMode(true) => "Switch to LIVE brokerage accounts (asks first)".into(),
-        Function::Kill => {
-            "Kill switch: cancel every open Hyperliquid testnet order, then turn Hyperliquid orders off".into()
-        }
         Function::Perp => "Switch between the security and its HIP-3 perp (PERP · HL xyz)".into(),
     }
 }
@@ -674,54 +544,24 @@ mod tests {
     }
 
     #[test]
-    fn trade_commands() {
-        let t = |s: &str| match parse(s) {
-            Some(Command::Function(Function::Trade(t))) => Some(t),
-            Some(Command::SymbolFunction(k, Function::Trade(mut t))) => {
-                t.symbol = Some(k);
-                Some(t)
-            }
-            _ => None,
-        };
-        let aapl = Some("AAPL US Equity".to_string());
-        assert_eq!(
-            t("BUY AAPL 10"),
-            Some(TradeArgs { buy: Some(true), symbol: aapl.clone(), units: Some(10.0), ..Default::default() })
-        );
-        assert_eq!(t("buy 10 aapl"), t("BUY AAPL 10"), "quantity and symbol in either order");
-        assert_eq!(t("AAPL BUY 10"), t("BUY AAPL 10"), "after a security");
-        assert_eq!(t("AAPL US EQUITY BUY 10"), t("BUY AAPL 10"));
-        let s = t("SELL MSFT 5 LMT 410.50").unwrap();
-        assert_eq!((s.buy, s.units, s.limit), (Some(false), Some(5.0), Some(410.5)));
-        assert_eq!(t("SELL MSFT 5 @410.5").unwrap().limit, Some(410.5));
-        let st = t("SELL TSLA 3 STP 250 LMT 245").unwrap();
-        assert_eq!((st.stop, st.limit), (Some(250.0), Some(245.0)));
-        let n = t("BUY NVDA $1,500").unwrap();
-        assert_eq!((n.notional, n.units), (Some(1500.0), None));
-        assert_eq!(t("BUY 0.5 BRK/B").unwrap().symbol.as_deref(), Some("BRK.B US Equity"));
-        let open = t("TRADE").unwrap();
-        assert_eq!((open.buy, open.symbol), (None, None));
-        assert_eq!(t("TRADE AAPL").unwrap().symbol, aapl);
-        assert_eq!(t("BUY").unwrap().buy, Some(true));
-        // Ambiguous or malformed orders are rejected rather than guessed.
-        assert_eq!(t("BUY AAPL 10 20"), None);
-        assert_eq!(t("BUY AAPL 10 $500"), None);
-        assert_eq!(t("BUY AAPL LMT"), None);
-        assert_eq!(t("BUY AAPL LMT -5"), None);
-        assert!(hint("BUY AAPL 10 LMT 150").contains("Buy 10 AAPL limit 150"));
-        let all = t("SELL ALL TSLA").unwrap();
-        assert_eq!((all.buy, all.all, all.symbol.as_deref()), (Some(false), true, Some("TSLA US Equity")));
-        assert_eq!(t("sell tsla all"), t("SELL ALL TSLA"));
-        assert_eq!(t("TSLA SELL ALL").map(|a| a.all), Some(true));
-        assert!(!t("SELL ALL").unwrap().all, "ALL alone is Allstate");
-        assert_eq!(t("BUY ALL TSLA"), None);
-        assert_eq!(t("SELL ALL TSLA 5"), None);
-        assert_eq!(parse("DEMO"), Some(Command::Function(Function::AccountMode(false))));
-        assert_eq!(parse("MODE LIVE"), Some(Command::Function(Function::AccountMode(true))));
-        assert_eq!(parse("KILL"), Some(Command::Function(Function::Kill)));
-        assert_eq!(parse("kill"), Some(Command::Function(Function::Kill)));
-        let perp = t("BUY xyz:AAPL 0.5 @226.4").unwrap();
-        assert_eq!((perp.symbol.as_deref(), perp.units, perp.limit), (Some("xyz:AAPL"), Some(0.5), Some(226.4)));
+    fn order_commands_are_unavailable() {
+        for command in [
+            "BUY",
+            "BUY AAPL 10",
+            "SELL ALL TSLA",
+            "AAPL SELL 3",
+            "TRADE",
+            "TICKET",
+            "KILL",
+            "DEMO",
+            "PAPER",
+            "MODE LIVE",
+            "xyz:AAPL BUY 1",
+        ] {
+            assert!(parse(command).is_none(), "execution command must not parse: {command}");
+        }
+        assert!(parse("AAPL").is_some());
+        assert!(parse("AAPL OB").is_some());
     }
 
     #[test]

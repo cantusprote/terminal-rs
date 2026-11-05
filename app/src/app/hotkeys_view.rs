@@ -285,18 +285,8 @@ impl TerminalApp {
                 ],
             );
 
-            section(ui, "Trading (off until enabled in Settings › Trading)");
-            command_table(
-                ui,
-                "help-trading",
-                &[
-                    (&["BUY AAPL 10", "SELL MSFT 5"], "Order ticket, prefilled (preview and confirm before sending)"),
-                    (&["BUY AAPL 10 LMT 190", "@190"], "Limit order"),
-                    (&["SELL TSLA 3 STP 250 LMT 245"], "Stop or stop-limit order"),
-                    (&["BUY NVDA $500"], "Dollar amount (market, day; broker permitting)"),
-                    (&["TRADE", "AAPL BUY"], "Open the ticket"),
-                ],
-            );
+            section(ui, "Read-only market analysis");
+            para(ui, "Order entry, wallet signing and trade cancellation are not available in this version.");
 
             section(ui, "Charts");
             command_table(

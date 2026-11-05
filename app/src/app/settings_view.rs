@@ -20,18 +20,16 @@ pub enum SettingsTab {
     Panels,
     Layouts,
     Brokerage,
-    Trading,
 }
 
 impl SettingsTab {
-    pub(super) const ALL: [SettingsTab; 7] = [
+    pub(super) const ALL: [SettingsTab; 6] = [
         SettingsTab::Appearance,
         SettingsTab::Themes,
         SettingsTab::Hotkeys,
         SettingsTab::Panels,
         SettingsTab::Layouts,
         SettingsTab::Brokerage,
-        SettingsTab::Trading,
     ];
 
     pub(super) fn label(self) -> &'static str {
@@ -42,7 +40,6 @@ impl SettingsTab {
             SettingsTab::Panels => "Panels",
             SettingsTab::Layouts => "Layouts",
             SettingsTab::Brokerage => "Brokerage",
-            SettingsTab::Trading => "Trading",
         }
     }
 }
@@ -130,7 +127,6 @@ impl TerminalApp {
                 SettingsTab::Panels => self.panels_tab(ui, &mut cmds),
                 SettingsTab::Layouts => self.layouts_tab(ui, &mut cmds),
                 SettingsTab::Brokerage => self.brokerage_tab(ui),
-                SettingsTab::Trading => self.trading_tab(ui, &mut cmds),
             }
         });
         cmds
