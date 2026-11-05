@@ -18,6 +18,7 @@ use crate::alpaca::AlpacaProvider;
 #[cfg(target_os = "macos")]
 use crate::apple_stocks::AppleStocksCache;
 use crate::crypto::CryptoProvider;
+use crate::kiwoom::{KiwoomProvider, is_domestic};
 use crate::treasury::TreasuryProvider;
 use crate::yahoo::{YahooProvider, yahoo_symbol};
 use crate::{
@@ -29,6 +30,7 @@ pub struct Markets {
     crypto: CryptoProvider,
     treasury: TreasuryProvider,
     alpaca: Option<AlpacaProvider>,
+    kiwoom: Option<KiwoomProvider>,
     #[cfg(target_os = "macos")]
     apple: Option<AppleStocksCache>,
     name: String,
@@ -42,6 +44,8 @@ fn apple_supports(class: AssetClass) -> bool {
 impl Markets {
     pub fn new(alpaca: Option<AlpacaProvider>) -> Result<Self> {
         let name = if alpaca.is_some() { "alpaca+yahoo+binance+ust" } else { "yahoo+binance+ust" }.to_string();
+        let kiwoom = KiwoomProvider::from_env();
+        let name = if kiwoom.is_some() { format!("kiwoom-kr+{name}") } else { name };
         #[cfg(target_os = "macos")]
         let apple = AppleStocksCache::from_env();
         #[cfg(target_os = "macos")]
@@ -51,6 +55,7 @@ impl Markets {
             crypto: CryptoProvider::new()?,
             treasury: TreasuryProvider::new()?,
             alpaca,
+            kiwoom,
             #[cfg(target_os = "macos")]
             apple,
             name,
@@ -66,6 +71,11 @@ impl MarketData for Markets {
 
     async fn history(&self, symbol: &str, tf: Timeframe, end: Option<i64>, limit: usize) -> Result<Vec<Bar>> {
         let sec = security(symbol);
+        if let Some(kiwoom) = &self.kiwoom
+            && is_domestic(&sec)
+        {
+            return kiwoom.history(&sec, tf, end, limit).await;
+        }
         // A chart may prime Apple's cache only when the separate,
         // explicitly authorized Stocks auto-launch setting is enabled.
         // Cache-only mode never opens Stocks and uses Yahoo/Alpaca instead.
@@ -137,9 +147,13 @@ impl MarketData for Markets {
     }
 
     async fn quotes(&self, symbols: &[String]) -> Result<Vec<Quote>> {
-        let (mut crypto, mut govt, mut other) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut crypto, mut govt, mut other, mut domestic) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for key in symbols {
             let sec = security(key);
+            if self.kiwoom.is_some() && is_domestic(&sec) {
+                domestic.push((key.clone(), sec));
+                continue;
+            }
             match sec.class {
                 AssetClass::Perp => {}
                 AssetClass::Crypto => crypto.push((key.clone(), sec)),
@@ -172,7 +186,7 @@ impl MarketData for Markets {
         }
         let remaining: Vec<_> =
             other.iter().filter(|(key, _)| !apple_quotes.iter().any(|q| q.symbol == *key)).collect();
-        let (c, g, y) = tokio::join!(
+        let (c, g, y, k) = tokio::join!(
             async { if crypto.is_empty() { Ok(vec![]) } else { self.crypto.quotes(&crypto).await } },
             async { if govt.is_empty() { Ok(vec![]) } else { self.treasury.quotes(&govt).await } },
             async {
@@ -191,11 +205,17 @@ impl MarketData for Markets {
                         })
                         .collect(),
                 )
+            },
+            async {
+                match &self.kiwoom {
+                    Some(provider) if !domestic.is_empty() => provider.quotes(&domestic).await,
+                    _ => Ok(vec![]),
+                }
             }
         );
         let mut out = apple_quotes;
         let mut errors = Vec::new();
-        for r in [c, g, y] {
+        for r in [c, g, y, k] {
             match r {
                 Ok(q) => out.extend(q),
                 Err(e) => errors.push(format!("{e:#}")),
@@ -209,10 +229,21 @@ impl MarketData for Markets {
 
     fn live(&self, symbol: &str, tf: Timeframe) -> Option<LiveFeed> {
         let sec = security(symbol);
+        if is_domestic(&sec)
+            && let Some(kiwoom) = &self.kiwoom
+        {
+            return kiwoom.live(&sec, tf);
+        }
         (sec.class == AssetClass::Crypto).then(|| CryptoProvider::live(&sec, tf))
     }
 
     async fn search(&self, query: &str) -> Result<Vec<SearchHit>> {
+        if let Some(kiwoom) = &self.kiwoom {
+            let hits = kiwoom.search(query).await?;
+            if !hits.is_empty() {
+                return Ok(hits);
+            }
+        }
         self.yahoo.search(query).await
     }
 
@@ -250,6 +281,11 @@ impl MarketData for Markets {
 
     async fn order_book(&self, symbol: &str, depth: usize) -> Result<OrderBook> {
         let sec = security(symbol);
+        if is_domestic(&sec)
+            && let Some(kiwoom) = &self.kiwoom
+        {
+            return kiwoom.order_book(&sec, depth).await;
+        }
         match sec.class {
             AssetClass::Crypto => self.crypto.order_book(symbol, &sec, depth).await,
             _ => bail!("no free public order book for {}", sec.key()),

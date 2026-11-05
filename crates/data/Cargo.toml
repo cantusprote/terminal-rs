@@ -18,7 +18,7 @@ futures = "0.3"
 web-time = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
 rusqlite.workspace = true
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }

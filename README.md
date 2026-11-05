@@ -354,6 +354,18 @@ The running app accepts changes over a per-user `0600` Unix socket;
 standalone quote and history queries work when the app is closed.
 See [personal CLI / MCP setup and tool catalog](docs/personal-cli-mcp-2026-11-05.md).
 
+### Korean market data (Kiwoom)
+
+On macOS with the official `kiwoomcli` already configured, Terminal-rs
+automatically uses **Kiwoom REST** for Korean stocks, ETFs and KOSPI/KOSDAQ
+indices, with **authenticated WebSocket** streaming for open Korean charts.
+US stocks, foreign indices, FX, futures, crypto and other providers retain
+their existing sources. The UI and saved layouts are unchanged, and no
+order/trading capability is introduced. The native `terminal-cli` and
+`terminal_rs` MCP tools use the same Korean data routing.
+
+See [Kiwoom Korean market provider — architecture, settings, API mappings and tests](docs/kiwoom-domestic-provider.md).
+
 ## Keyboard shortcuts and commands
 
 Press **F1** (or type `HELP`) for the full, searchable list; every hotkey can be rebound in

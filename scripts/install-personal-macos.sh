@@ -44,8 +44,13 @@ if ! mv "$bundle" "$destination" || ! codesign --verify --deep --strict "$destin
   exit 1
 fi
 # Keep an equally configured build artifact as a convenient copy for this Mac.
-rm -rf target/release/Terminal-rs.app
-ditto "$destination" target/release/Terminal-rs.app
+project_app="$(pwd)/target/release/Terminal-rs.app"
+if pgrep -f "^$project_app/Contents/MacOS/Terminal$" >/dev/null 2>&1; then
+  echo "Preserving currently running $project_app; use /Applications/Terminal-rs.app after quitting."
+else
+  rm -rf target/release/Terminal-rs.app
+  ditto "$destination" target/release/Terminal-rs.app
+fi
 echo "Installed: $destination"
 echo "CLI: $(pwd)/target/release/terminal-cli"
 echo "Apple Stocks cache read-only; automatic launch disabled. No public updates or trade execution."

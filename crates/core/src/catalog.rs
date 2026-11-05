@@ -173,6 +173,8 @@ pub static CATALOG: LazyLock<Vec<Listing>> = LazyLock::new(|| {
         yahoo("HSI", Index, "Hang Seng Index", AsiaPac, "^HSI", 20000.0),
         yahoo("SHCOMP", Index, "Shanghai Composite", AsiaPac, "000001.SS", 3300.0),
         yahoo("KOSPI", Index, "KOSPI Index", AsiaPac, "^KS11", 2600.0),
+        yahoo("KOSDAQ", Index, "KOSDAQ Index", AsiaPac, "^KQ11", 900.0),
+        yahoo("KOSPI200", Index, "KOSPI 200 Index", AsiaPac, "^KS200", 350.0),
         yahoo("AS51", Index, "S&P/ASX 200", AsiaPac, "^AXJO", 8200.0),
         yahoo("SENSEX", Index, "BSE Sensex", AsiaPac, "^BSESN", 80000.0),
         yahoo("TWSE", Index, "Taiwan Weighted Index", AsiaPac, "^TWII", 22000.0),

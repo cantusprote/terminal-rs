@@ -30,6 +30,8 @@ pub mod apple_stocks;
 pub mod cache;
 pub mod crypto;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod kiwoom;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod markets;
 pub mod remote;
 pub mod rss;
