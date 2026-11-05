@@ -1,0 +1,1 @@
+{"type":"object","properties":{"expression":{"type":"string","minLength":1,"maxLength":256,"description":"Examples: UP 2; VOL 2; SMA ABOVE; RSI HIGH; FRESH 30; SORT GAINERS; ALL"}},"required":["expression"],"additionalProperties":false}

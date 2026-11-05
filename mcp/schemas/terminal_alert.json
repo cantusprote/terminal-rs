@@ -1,0 +1,1 @@
+{"type":"object","properties":{"kind":{"type":"string","enum":["price","technical"]},"expression":{"type":"string","minLength":1,"maxLength":256,"description":"Price: AAPL ABOVE 210. Technical: AAPL RSI ABOVE 70. LIST or CLEAR manage that kind."}},"required":["kind","expression"],"additionalProperties":false}

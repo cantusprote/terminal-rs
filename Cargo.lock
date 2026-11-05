@@ -4296,6 +4296,7 @@ dependencies = [
  "tr-broker",
  "tr-chart",
  "tr-congress",
+ "tr-control",
  "tr-core",
  "tr-data",
  "tr-macos",
@@ -4306,6 +4307,17 @@ dependencies = [
  "web-sys",
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "terminal-cli"
+version = "0.1.1"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "tr-control",
+ "tr-core",
+ "tr-data",
 ]
 
 [[package]]
@@ -4668,6 +4680,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zip",
+]
+
+[[package]]
+name = "tr-control"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

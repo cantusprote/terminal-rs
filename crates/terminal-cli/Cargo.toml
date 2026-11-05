@@ -1,0 +1,12 @@
+[package]
+name = "terminal-cli"
+version.workspace = true
+edition.workspace = true
+description = "Standalone personal read-only Terminal-rs CLI and local app control"
+
+[dependencies]
+tr-control.workspace = true
+tr-core.workspace = true
+tr-data.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

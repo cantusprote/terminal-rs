@@ -7,6 +7,8 @@ mod chart_view;
 mod command;
 mod congress_view;
 mod dock;
+#[cfg(unix)]
+mod ipc;
 mod layout;
 mod layouts;
 mod markets_view;

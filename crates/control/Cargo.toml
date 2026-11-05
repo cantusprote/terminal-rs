@@ -1,0 +1,9 @@
+[package]
+name = "tr-control"
+version.workspace = true
+edition.workspace = true
+description = "Local-only control protocol for personal read-only Terminal-rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

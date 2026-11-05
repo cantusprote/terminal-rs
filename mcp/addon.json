@@ -1,0 +1,25 @@
+{
+  "manifest_version": "1",
+  "framework_api": "0.1",
+  "id": "terminal_rs",
+  "version": "0.1.0",
+  "transport": {
+    "type": "stdio",
+    "command": "/usr/bin/env",
+    "args": ["node", "./server.mjs"],
+    "env": { "TR_APPLE_STOCKS_CACHE": "1" }
+  },
+  "limits": { "max_response_bytes": 200000, "call_timeout_seconds": 55 },
+  "tools": [
+    {"name":"terminal_status","description":"Check local Terminal-rs app availability, active layout, provider and read-only status. Never changes application state.","schema":"schemas/terminal_status.json"},
+    {"name":"terminal_quote","description":"Fetch current observed market prices from Terminal-rs providers, including actual source and timestamp. Read-only; may be delayed.","schema":"schemas/terminal_quote.json"},
+    {"name":"terminal_history","description":"Retrieve up to 250 historical OHLCV bars for a market symbol. Read-only and source-dependent.","schema":"schemas/terminal_history.json"},
+    {"name":"terminal_search","description":"Search market instruments using Terminal-rs sources. No orders or transactions.","schema":"schemas/terminal_search.json"},
+    {"name":"terminal_book","description":"Inspect a public market order book, not personal orders. Read-only; some sources may provide simulated books, flagged as such.","schema":"schemas/terminal_book.json"},
+    {"name":"terminal_watchlist","description":"Inspect, add or remove symbols in the RUNNING local Terminal-rs app watchlist. Does not trade.","schema":"schemas/terminal_watchlist.json"},
+    {"name":"terminal_screen","description":"Set a watchlist analysis filter in the RUNNING app: UP/DOWN/MOVE percent, VOL ratio, SMA, RSI, freshness and sorting.","schema":"schemas/terminal_screen.json"},
+    {"name":"terminal_alert","description":"Manage local one-shot price or daily technical alerts in the RUNNING app. Does not submit trades.","schema":"schemas/terminal_alert.json"},
+    {"name":"terminal_open_chart","description":"Display a security in the RUNNING Terminal-rs GUI chart. No execution functionality.","schema":"schemas/terminal_open_chart.json"},
+    {"name":"terminal_app_quotes","description":"Inspect already-loaded market quotes in the RUNNING app without forcing a network request or trading.","schema":"schemas/terminal_app_quotes.json"}
+  ]
+}

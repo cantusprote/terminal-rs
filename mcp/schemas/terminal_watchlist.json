@@ -1,0 +1,1 @@
+{"type":"object","properties":{"operation":{"type":"string","enum":["list","add","remove"]},"symbol":{"type":"string","minLength":1,"maxLength":96}},"required":["operation"],"additionalProperties":false}

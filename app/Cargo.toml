@@ -16,6 +16,7 @@ tr-broker.workspace = true
 tr-congress.workspace = true
 tr-data.workspace = true
 tr-chart.workspace = true
+tr-control.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true

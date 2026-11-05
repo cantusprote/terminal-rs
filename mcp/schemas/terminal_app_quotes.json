@@ -1,0 +1,1 @@
+{"type":"object","properties":{"symbols":{"type":"array","items":{"type":"string","minLength":1,"maxLength":96},"minItems":1,"maxItems":50}},"required":["symbols"],"additionalProperties":false}

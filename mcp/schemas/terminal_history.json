@@ -1,0 +1,1 @@
+{"type":"object","properties":{"symbol":{"type":"string","minLength":1,"maxLength":96},"timeframe":{"type":"string","enum":["M1","M5","M15","M30","H1","H4","D1","W1","MN1"]},"limit":{"type":"integer","minimum":1,"maximum":250}},"required":["symbol"],"additionalProperties":false}

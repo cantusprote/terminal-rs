@@ -329,6 +329,25 @@ access. Terminal has no code path to place/cancel orders or sign wallet
 transactions. Legacy trading configuration fields are ignored on load.
 Historical order and activity records remain visible for analysis.
 
+## Personal CLI and MCP (Shellby / sSb)
+
+Terminal-rs has a **separate** `terminal-cli` program for quotes, history, search,
+public order books and strictly allowlisted control of the running macOS GUI.
+Its local MCP stdio adapter registers ten tools through the **sSb MCP Loader**
+without modifying Shellby Core. Both the CLI and MCP remain **analysis-only**:
+no trading, wallet signing, arbitrary shell command or source-file editing.
+The personal installation command is:
+
+```sh
+bash scripts/install-personal-macos.sh
+TR_APPLE_STOCKS_CACHE=1 target/release/terminal-cli quote AAPL
+target/release/terminal-cli app status
+```
+
+The running app accepts changes over a per-user `0600` Unix socket;
+standalone quote and history queries work when the app is closed.
+See [personal CLI / MCP setup and tool catalog](docs/personal-cli-mcp-2026-11-05.md).
+
 ## Keyboard shortcuts and commands
 
 Press **F1** (or type `HELP`) for the full, searchable list; every hotkey can be rebound in

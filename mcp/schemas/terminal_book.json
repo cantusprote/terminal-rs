@@ -1,0 +1,1 @@
+{"type":"object","properties":{"symbol":{"type":"string","minLength":1,"maxLength":96},"depth":{"type":"integer","minimum":1,"maximum":50}},"required":["symbol"],"additionalProperties":false}

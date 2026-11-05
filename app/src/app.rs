@@ -7,6 +7,8 @@
 mod broker;
 mod chrome;
 mod hotkeys_view;
+#[cfg(unix)]
+mod ipc_commands;
 mod options_view;
 mod palette_view;
 mod panels;
@@ -560,6 +562,8 @@ pub struct TerminalApp {
     broker: broker::BrokerState,
     /// ⌘K command palette.
     palette: crate::palette::Palette,
+    #[cfg(unix)]
+    ipc: Option<crate::ipc::IpcReceiver>,
 }
 
 /// Resolve a run of words (`BTCUSD CRNCY AAPL US EQUITY MSFT`) into market keys.
@@ -711,6 +715,14 @@ impl TerminalApp {
             chrome: None,
             last_chrome_poll: None,
             palette: crate::palette::Palette::load(&data_dir().join("palette.json")),
+            #[cfg(unix)]
+            ipc: match crate::ipc::IpcReceiver::bind(ctx.clone()) {
+                Ok(receiver) => Some(receiver),
+                Err(e) => {
+                    tracing::warn!("local Terminal control socket unavailable: {e}");
+                    None
+                }
+            },
         };
         let mut doc = None;
         if let Some(s) = &settings {
@@ -1586,6 +1598,8 @@ impl eframe::App for TerminalApp {
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        #[cfg(unix)]
+        self.poll_ipc();
         let frame_start = Instant::now();
         if let Some(prev) = self.last_frame.replace(frame_start) {
             let dt = prev.elapsed().as_secs_f64() * 1e3;
