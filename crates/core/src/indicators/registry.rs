@@ -596,7 +596,8 @@ fn catalog() -> Vec<Def> {
         .n("%K Smoothing", 1.0)
         .n("%D Smoothing", 3.0)
         .range(0.0, 100.0)
-        .levels(&[20.0, 80.0]),
+        .levels(&[20.0, 80.0])
+        .multi(),
         // Korean securities commonly plot several *slow %D only* curves
         // (5,3,3 / 10,6,6 / 20,12,12) on one common 0..100 oscillator axis.
         // Keep the existing STOCH %K+%D study unchanged for old layouts.
@@ -1382,6 +1383,35 @@ mod tests {
         assert_eq!(text, r#"["STOCHD 5 3 3","STOCHD 10 6 6","STOCHD 20 12 12"]"#);
         assert_eq!(serde_json::from_str::<Vec<Spec>>(&text).unwrap(), studies);
         assert_eq!(Spec::new("STOCH", &[]).unwrap().code, "STOCH", "legacy stochastic remains available");
+    }
+
+    #[test]
+    fn stoch_k_and_d_pairs_support_three_independent_period_combinations() {
+        let bars = walk(240, Timeframe::D1);
+        let input = Input::new(&bars, Timeframe::D1);
+        let combinations = [[5.0, 2.0, 2.0], [10.0, 5.0, 5.0], [20.0, 10.0, 10.0]];
+        let specs: Vec<_> = combinations.iter().map(|params| Spec::new("STOCH", params).unwrap()).collect();
+        for (spec, params) in specs.iter().zip(combinations) {
+            let outputs = spec.compute(&input);
+            assert_eq!(outputs.len(), 2);
+            assert_eq!((outputs[0].name, outputs[1].name), ("%K", "%D"));
+            let reference = stochastic(&input.d, params[0] as usize, params[1] as usize, params[2] as usize);
+            for (result, reference) in [(&outputs[0].values, reference.k), (&outputs[1].values, reference.d)] {
+                for (actual, expected) in result.iter().zip(reference) {
+                    if expected.is_finite() {
+                        assert!((actual - expected).abs() < 1e-9);
+                        assert!((0.0..=100.0).contains(actual));
+                    }
+                }
+            }
+        }
+        assert!(!specs[0].same_kind(&specs[1]));
+        assert!(!specs[1].same_kind(&specs[2]));
+        assert!(specs[0].same_kind(&specs[0]));
+        let json = serde_json::to_string(&specs).unwrap();
+        assert_eq!(json, r#"["STOCH 5 2 2","STOCH 10 5 5","STOCH 20 10 10"]"#);
+        assert_eq!(serde_json::from_str::<Vec<Spec>>(&json).unwrap(), specs);
+        assert!(Spec::new("STOCHD", &[5.0, 3.0, 3.0]).is_some(), "saved prior %D-only charts remain loadable");
     }
 
     #[test]

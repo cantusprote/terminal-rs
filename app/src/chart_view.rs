@@ -163,7 +163,7 @@ impl ChartState {
             show_congress: true,
             indicators: if is_korean { Self::korean_study_preset() } else { crate::command::default_indicators() },
             custom_sma_length: 30,
-            custom_slow_stoch: [5, 3, 3],
+            custom_slow_stoch: [5, 2, 2],
             drawings: Vec::new(),
             compare: None,
             bars: Arc::new(Vec::new()),
@@ -334,19 +334,19 @@ impl ChartState {
     /// Applied automatically only to *new* Korean charts. Previously saved
     /// layouts keep their own indicators until the user requests this preset.
     fn korean_study_preset() -> Vec<IndicatorSpec> {
-        [5.0, 10.0, 20.0, 60.0, 120.0]
+        [5.0, 20.0, 60.0, 120.0]
             .into_iter()
             .filter_map(|n| IndicatorSpec::new("SMA", &[n]))
             .chain(
-                [[5.0, 3.0, 3.0], [10.0, 6.0, 6.0], [20.0, 12.0, 12.0]]
+                [[5.0, 2.0, 2.0], [10.0, 5.0, 5.0], [20.0, 10.0, 10.0]]
                     .into_iter()
-                    .filter_map(|params| IndicatorSpec::new("STOCHD", &params)),
+                    .filter_map(|params| IndicatorSpec::new("STOCH", &params)),
             )
             .collect()
     }
 
     fn apply_korean_study_preset(&mut self, w: &Worker) {
-        self.indicators.retain(|s| s.code != "SMA" && s.code != "STOCHD");
+        self.indicators.retain(|s| !matches!(s.code.as_str(), "SMA" | "STOCH" | "STOCHD"));
         self.indicators.extend(Self::korean_study_preset());
         self.request_indicators(w);
     }
@@ -1173,23 +1173,28 @@ impl ChartState {
                 self.actions.push(Action::Command("IND".into()));
                 ui.close();
             }
-            if ui.button("Apply Korean preset · SMA 5/10/20/60/120 + Slow %D ×3").clicked() {
+            if ui.button("Apply Korean preset · SMA 5/20/60/120 + Stoch %K/%D ×3").clicked() {
                 self.apply_korean_study_preset(w);
                 ui.close();
             }
             ui.menu_button("Multiple SMA lines…", |ui| self.sma_add_menu(ui, w));
-            ui.menu_button("Slow Stochastic %D lines…", |ui| self.stochd_add_menu(ui, w));
+            ui.menu_button("Stochastic %K + %D studies…", |ui| self.stochastic_add_menu(ui, w));
             if !self.indicators.is_empty() {
                 ui.separator();
                 ui.label(RichText::new("On this chart · change periods or remove a line").small().color(muted()));
                 for (index, spec) in self.indicators.clone().into_iter().enumerate() {
-                    if matches!(spec.code.as_str(), "SMA" | "STOCHD") {
+                    if matches!(spec.code.as_str(), "SMA" | "STOCH" | "STOCHD") {
                         let mut params = spec.params.clone();
                         let mut remove = false;
                         let mut changed = false;
                         ui.push_id((self.id, "edit-study", index), |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(if spec.code == "SMA" { "SMA" } else { "Slow %D" }).on_hover_text(spec.name());
+                                ui.label(match spec.code.as_str() {
+                                    "SMA" => "SMA",
+                                    "STOCH" => "Sto %K/%D",
+                                    _ => "Legacy %D",
+                                })
+                                .on_hover_text(spec.name());
                                 for (idx, val) in params.iter_mut().enumerate() {
                                     let mut n = *val as usize;
                                     let limit = spec.def().and_then(|d| d.params.get(idx));
@@ -1229,8 +1234,21 @@ impl ChartState {
                                 ui.menu_button("Simple Moving Average · add lines", |ui| self.sma_add_menu(ui, w));
                                 continue;
                             }
+                            if def.code == "STOCH" {
+                                ui.menu_button("Stochastic %K + %D · add studies", |ui| {
+                                    self.stochastic_add_menu(ui, w)
+                                });
+                                continue;
+                            }
                             if def.code == "STOCHD" {
-                                ui.menu_button("Slow Stochastic %D · add lines", |ui| self.stochd_add_menu(ui, w));
+                                let on = self.indicators.iter().any(|s| s.code == def.code);
+                                if ui.checkbox(&mut on.clone(), "Legacy Slow %D only").clicked() {
+                                    if on {
+                                        self.remove_indicator(def.code, w);
+                                    } else {
+                                        self.toggle_indicator(IndicatorSpec::of(def), w);
+                                    }
+                                }
                                 continue;
                             }
                             let on = self.indicators.iter().any(|s| s.code == def.code);
@@ -1288,7 +1306,7 @@ impl ChartState {
         ui.set_min_width(225.0);
         ui.label(RichText::new("SMA · select additional lengths").color(muted()));
         ui.horizontal_wrapped(|ui| {
-            for n in [5, 10, 20, 60, 120] {
+            for n in [5, 20, 60, 120] {
                 let active = self.indicators.iter().any(|s| s.code == "SMA" && s.params == [n as f64]);
                 if ui.add_enabled(!active, egui::Button::new(format!("{n}"))).clicked()
                     && let Some(spec) = IndicatorSpec::new("SMA", &[n as f64])
@@ -1309,31 +1327,31 @@ impl ChartState {
         ui.label(RichText::new("Periods count chart bars (1D = trading days)").small().color(muted()));
     }
 
-    fn stochd_add_menu(&mut self, ui: &mut Ui, w: &Worker) {
+    fn stochastic_add_menu(&mut self, ui: &mut Ui, w: &Worker) {
         ui.set_min_width(235.0);
-        ui.label(RichText::new("Slow Stochastic %D · one shared pane").color(muted()));
-        for periods in [[5, 3, 3], [10, 6, 6], [20, 12, 12]] {
+        ui.label(RichText::new("Stochastic %K + %D · each in its own pane").color(muted()));
+        for periods in [[5, 2, 2], [10, 5, 5], [20, 10, 10]] {
             let params = periods.map(f64::from);
-            let active = self.indicators.iter().any(|s| s.code == "STOCHD" && s.params == params);
+            let active = self.indicators.iter().any(|s| s.code == "STOCH" && s.params == params);
             if ui
                 .add_enabled(
                     !active,
-                    egui::Button::new(format!("Slow %D ({}, {}, {})", periods[0], periods[1], periods[2])),
+                    egui::Button::new(format!("Sto %K/%D ({}, {}, {})", periods[0], periods[1], periods[2])),
                 )
                 .clicked()
-                && let Some(spec) = IndicatorSpec::new("STOCHD", &params)
+                && let Some(spec) = IndicatorSpec::new("STOCH", &params)
             {
                 self.add_indicator_instance(spec, w);
             }
         }
         ui.separator();
-        ui.label("Custom: %K length / slow %K / %D");
+        ui.label("Custom: lookback / slow %K / slow %D");
         ui.horizontal(|ui| {
             for n in &mut self.custom_slow_stoch {
                 ui.add(egui::DragValue::new(n).range(1..=1000).speed(0.15));
             }
-            if ui.button("Add %D").clicked()
-                && let Some(spec) = IndicatorSpec::new("STOCHD", &self.custom_slow_stoch.map(|n| n as f64))
+            if ui.button("Add K+D").clicked()
+                && let Some(spec) = IndicatorSpec::new("STOCH", &self.custom_slow_stoch.map(|n| n as f64))
             {
                 self.add_indicator_instance(spec, w);
             }
@@ -1768,28 +1786,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn korean_default_has_five_smas_and_three_slow_d_in_one_oscillator_pane() {
+    fn korean_default_has_four_smas_and_three_separate_stoch_kd_panes() {
         for symbol in ["KOSPI", "KOSDAQ", "005930.KS", "000660.KS"] {
             let chart = ChartState::new(17, symbol, Timeframe::D1);
-            assert_eq!(chart.indicators.len(), 8, "{symbol}");
+            assert_eq!(chart.indicators.len(), 7, "{symbol}");
             assert_eq!(
                 chart.indicators.iter().filter(|s| s.code == "SMA").map(|s| s.params[0] as usize).collect::<Vec<_>>(),
-                [5, 10, 20, 60, 120],
+                [5, 20, 60, 120],
             );
-            let slow: Vec<_> = chart.indicators.iter().filter(|s| s.code == "STOCHD").collect();
+            let slow: Vec<_> = chart.indicators.iter().filter(|s| s.code == "STOCH").collect();
             assert_eq!(
                 slow.iter().map(|s| s.params.clone()).collect::<Vec<_>>(),
-                [vec![5.0, 3.0, 3.0], vec![10.0, 6.0, 6.0], vec![20.0, 12.0, 12.0]]
+                [vec![5.0, 2.0, 2.0], vec![10.0, 5.0, 5.0], vec![20.0, 10.0, 10.0]]
             );
             let bars = tr_core::sample::generate("005930.KS", Timeframe::D1, 250, 1_790_000_000);
             let built = crate::worker::build_indicators(&bars, Timeframe::D1, &chart.indicators, &theme::palette());
             let groups = oscillator_groups(&built);
-            assert_eq!(groups.len(), 1);
-            assert_eq!(groups[0], vec![5, 6, 7]);
-            let rgba: Vec<_> = groups[0].iter().map(|&i| built[i].overlays[0].1.color).collect();
-            assert!(rgba[0] != rgba[1] && rgba[1] != rgba[2] && rgba[0] != rgba[2], "three differently coloured lines");
-            for i in &groups[0] {
-                assert_eq!(built[*i].overlays.len(), 1, "only %D");
+            assert_eq!(groups, [vec![4], vec![5], vec![6]], "each K/D pair has its own oscillator panel");
+            for group in &groups {
+                let overlays = &built[group[0]].overlays;
+                assert_eq!(overlays.len(), 2, "both %K and %D");
+                assert_eq!(overlays[0].0, "%K");
+                assert_eq!(overlays[1].0, "%D");
+                assert_ne!(overlays[0].1.color, overlays[1].1.color, "K and D must be distinguishable");
             }
         }
         let foreign = ChartState::new(17, "AAPL", Timeframe::D1);

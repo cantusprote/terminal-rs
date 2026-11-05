@@ -63,9 +63,9 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
   (`RSI`, `SMA 200`, `BB 20 2.5`), browse and search with `IND`, or right-click the chart.
   Oscillators get their own panes (up to six) with reference levels; moving averages can be added
   several times; indicators are saved with the layout. Korean charts can display
-  **five independently editable SMA lengths (5/10/20/60/120)** plus **three
-  Slow Stochastic %D curves (5,3,3 / 10,6,6 / 20,12,12) in one pane**.
-  See [multiple moving averages and Slow Stochastic %D](docs/chart-multiple-sma-and-slow-stochastic.md).
+  **four independently editable SMA lengths (5/20/60/120)** plus **three
+  Stochastic %K/%D pairs (5,2,2 / 10,5,5 / 20,10,10) in separate panes**.
+  See [multiple moving averages and Stochastic %K/%D](docs/chart-multiple-sma-and-slow-stochastic.md).
 - **Drawings** — trendline (Alt+T), horizontal (Alt+H), vertical (Alt+V) and fib retracement
   (Alt+F), stored in (time, price) so they survive zoom and timeframe changes; magnet (Alt+M) snaps
   to OHLC; click to select, Del to remove.

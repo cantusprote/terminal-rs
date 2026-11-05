@@ -501,14 +501,21 @@ pub fn build_indicators(
             let overlays = outputs
                 .into_iter()
                 .map(|o| {
-                    let color = match o.tone {
-                        Tone::Main => main,
-                        Tone::Signal if main == palette.amber => palette.cyan,
-                        Tone::Signal => palette.amber,
-                        Tone::Dim => main.gamma_multiply(0.6),
-                        Tone::Up => palette.up,
-                        Tone::Down => palette.down,
-                        Tone::Series(k) => palette.series[(i + 1 + k as usize) % colors],
+                    // Two stable, contrasting colors for the K/D pair,
+                    // matching the convention in Korean stochastic charts.
+                    // Each STOCH instance has its own oscillator pane.
+                    let color = match (spec.code.as_str(), o.tone) {
+                        ("STOCH", Tone::Main) if palette.dark => egui::Color32::from_rgb(255, 65, 98),
+                        ("STOCH", Tone::Main) => egui::Color32::from_rgb(211, 24, 65),
+                        ("STOCH", Tone::Signal) if palette.dark => egui::Color32::from_rgb(212, 127, 231),
+                        ("STOCH", Tone::Signal) => egui::Color32::from_rgb(157, 72, 184),
+                        (_, Tone::Main) => main,
+                        (_, Tone::Signal) if main == palette.amber => palette.cyan,
+                        (_, Tone::Signal) => palette.amber,
+                        (_, Tone::Dim) => main.gamma_multiply(0.6),
+                        (_, Tone::Up) => palette.up,
+                        (_, Tone::Down) => palette.down,
+                        (_, Tone::Series(k)) => palette.series[(i + 1 + k as usize) % colors],
                     };
                     let kind = match o.plot {
                         Plot::Line => LineKind::Line,
