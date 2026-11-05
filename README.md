@@ -51,7 +51,7 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
   1M plus quick ranges (1D … ALL); volume; 151 indicators; `CMP <SYM>` compare; log scale;
   crosshair with OHLC legend; smooth pan and zoom over a million bars. Live crypto bars from the
   Binance websocket (Coinbase fallback).
-- **Indicators** — 151 built-in studies: 23 moving averages (SMA, EMA, WMA, Hull, DEMA/TEMA, KAMA,
+- **Indicators** — 152 built-in studies: 23 moving averages (SMA, EMA, WMA, Hull, DEMA/TEMA, KAMA,
   ALMA, T3, McGinley, VIDYA, FRAMA, MAMA/FAMA, Ehlers filters, GMMA…), 8 bands and channels
   (Bollinger, Keltner, Donchian, STARC, standard-error and VWAP bands…), 43 momentum oscillators
   (RSI, MACD, Stochastic, StochRSI, CCI, Williams %R, TSI, KST, Fisher, Schaff, QQE, WaveTrend,
@@ -62,7 +62,10 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
   11 rolling statistics and five pivot-point families. Type a code with optional parameters
   (`RSI`, `SMA 200`, `BB 20 2.5`), browse and search with `IND`, or right-click the chart.
   Oscillators get their own panes (up to six) with reference levels; moving averages can be added
-  several times; indicators are saved with the layout.
+  several times; indicators are saved with the layout. Korean charts can display
+  **five independently editable SMA lengths (5/10/20/60/120)** plus **three
+  Slow Stochastic %D curves (5,3,3 / 10,6,6 / 20,12,12) in one pane**.
+  See [multiple moving averages and Slow Stochastic %D](docs/chart-multiple-sma-and-slow-stochastic.md).
 - **Drawings** — trendline (Alt+T), horizontal (Alt+H), vertical (Alt+V) and fib retracement
   (Alt+F), stored in (time, price) so they survive zoom and timeframe changes; magnet (Alt+M) snaps
   to OHLC; click to select, Del to remove.

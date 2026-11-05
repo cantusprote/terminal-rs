@@ -597,6 +597,17 @@ fn catalog() -> Vec<Def> {
         .n("%D Smoothing", 3.0)
         .range(0.0, 100.0)
         .levels(&[20.0, 80.0]),
+        // Korean securities commonly plot several *slow %D only* curves
+        // (5,3,3 / 10,6,6 / 20,12,12) on one common 0..100 oscillator axis.
+        // Keep the existing STOCH %K+%D study unchanged for old layouts.
+        pane("STOCHD", "Slow Stochastic %D", mom, |i, p| one("Slow %D", stochastic(&i.d, n(p, 0), n(p, 1), n(p, 2)).d))
+            .alias(&["SLOWSTOCH", "STOCHSLOW", "SLOWD"])
+            .n("%K Length", 5.0)
+            .n("%K Smoothing", 3.0)
+            .n("%D Smoothing", 3.0)
+            .range(0.0, 100.0)
+            .levels(&[20.0, 80.0])
+            .multi(),
         pane("STOCHRSI", "Stochastic RSI", mom, |i, p| {
             let s = stoch_rsi(i.c(), n(p, 0), n(p, 1), n(p, 2), n(p, 3));
             vec![line("%K", s.k), signal("%D", s.d)]
@@ -1338,6 +1349,39 @@ mod tests {
         assert!(rsi(14.0).same_kind(&rsi(21.0)));
         assert!(!rsi(14.0).same_kind(&sma(14.0)));
         assert!(rsi(14.0).is_pane() && !sma(20.0).is_pane());
+    }
+
+    #[test]
+    fn slow_stochastic_d_supports_distinct_editable_instances_and_exact_formula() {
+        let input_bars = walk(240, Timeframe::D1);
+        let input = Input::new(&input_bars, Timeframe::D1);
+        let combinations = [[5.0, 3.0, 3.0], [10.0, 6.0, 6.0], [20.0, 12.0, 12.0]];
+        let studies: Vec<_> = combinations.iter().map(|params| Spec::new("STOCHD", params).unwrap()).collect();
+        for (i, spec) in studies.iter().enumerate() {
+            let result = spec.compute(&input);
+            assert_eq!(result.len(), 1, "Slow %D only; do not plot %K");
+            assert_eq!(result[0].name, "Slow %D");
+            let expected = stochastic(
+                &input.d,
+                combinations[i][0] as usize,
+                combinations[i][1] as usize,
+                combinations[i][2] as usize,
+            )
+            .d;
+            for (actual, reference) in result[0].values.iter().zip(expected) {
+                if reference.is_finite() {
+                    assert!((*actual - reference).abs() < 1e-9);
+                    assert!((0.0..=100.0).contains(actual));
+                }
+            }
+        }
+        assert!(!studies[0].same_kind(&studies[1]));
+        assert!(!studies[1].same_kind(&studies[2]));
+        assert!(studies[0].same_kind(&studies[0]));
+        let text = serde_json::to_string(&studies).unwrap();
+        assert_eq!(text, r#"["STOCHD 5 3 3","STOCHD 10 6 6","STOCHD 20 12 12"]"#);
+        assert_eq!(serde_json::from_str::<Vec<Spec>>(&text).unwrap(), studies);
+        assert_eq!(Spec::new("STOCH", &[]).unwrap().code, "STOCH", "legacy stochastic remains available");
     }
 
     #[test]

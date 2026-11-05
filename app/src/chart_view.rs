@@ -35,6 +35,25 @@ const DEFAULT_VISIBLE: usize = 160;
 /// chart has room for at most seven.
 const MAX_SUB_PANES: usize = 6;
 
+/// Combine multiple Slow Stochastic %D instances onto one shared 0–100
+/// oscillator scale; all other oscillator studies keep separate panes.
+fn oscillator_groups(built: &[BuiltIndicator]) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (i, indicator) in built.iter().enumerate() {
+        if !indicator.spec.is_pane() {
+            continue;
+        }
+        if indicator.spec.code == "STOCHD"
+            && let Some(group) = groups.iter_mut().find(|group| built[group[0]].spec.code == "STOCHD")
+        {
+            group.push(i);
+        } else {
+            groups.push(vec![i]);
+        }
+    }
+    groups
+}
+
 /// Length of the load-in sweep across the visible bars.
 const REVEAL_SECS: f32 = 0.7;
 /// Length of an eased jump (quick ranges, reset, keyboard zoom and pan).
@@ -79,6 +98,10 @@ pub struct ChartState {
     pub show_volume: bool,
     pub show_congress: bool,
     pub indicators: Vec<IndicatorSpec>,
+    /// Unsaved inputs for the context-menu's custom study controls. The
+    /// actual instances above are serialized with each chart's layout.
+    custom_sma_length: usize,
+    custom_slow_stoch: [usize; 3],
     pub drawings: Vec<Drawing>,
     pub compare: Option<String>,
 
@@ -125,20 +148,22 @@ pub struct ChartState {
 
 impl ChartState {
     pub fn new(id: PaneId, symbol: &str, tf: Timeframe) -> Self {
+        let sec = tr_data::security(symbol);
+        let is_korean = matches!(sec.ticker.as_str(), "KOSPI" | "KOSDAQ" | "KOSPI200")
+            || sec.ticker.ends_with(".KS")
+            || sec.ticker.ends_with(".KQ");
         Self {
             id,
-            symbol: tr_data::security(symbol).key(),
+            symbol: sec.key(),
             tf,
-            chart_type: if tr_data::security(symbol).class == AssetClass::Govt {
-                ChartType::Line
-            } else {
-                ChartType::Candles
-            },
+            chart_type: if sec.class == AssetClass::Govt { ChartType::Line } else { ChartType::Candles },
             log: false,
             magnet: false,
             show_volume: true,
             show_congress: true,
-            indicators: crate::command::default_indicators(),
+            indicators: if is_korean { Self::korean_study_preset() } else { crate::command::default_indicators() },
+            custom_sma_length: 30,
+            custom_slow_stoch: [5, 3, 3],
             drawings: Vec::new(),
             compare: None,
             bars: Arc::new(Vec::new()),
@@ -162,7 +187,7 @@ impl ChartState {
             pending_range: None,
             draw: DrawState::default(),
             hover_marker: None,
-            sec: tr_data::security(symbol),
+            sec,
             last_live: None,
             last_indicator_req: None,
             actions: Vec::new(),
@@ -273,6 +298,56 @@ impl ChartState {
         } else {
             self.indicators.push(spec);
         }
+        self.request_indicators(w);
+    }
+
+    /// Add a separate instance without removing an existing moving average
+    /// or stochastic with another parameter set.
+    fn add_indicator_instance(&mut self, spec: IndicatorSpec, w: &Worker) {
+        if self.indicators.contains(&spec) {
+            return;
+        }
+        if let Some(i) = self.indicators.iter().position(|s| s.same_kind(&spec)) {
+            self.indicators[i] = spec;
+        } else {
+            self.indicators.push(spec);
+        }
+        self.request_indicators(w);
+    }
+
+    /// Editing a study changes only that row, even when the same code occurs
+    /// several times. Identical period combinations are not duplicated.
+    fn edit_indicator_instance(&mut self, index: usize, params: &[f64], w: &Worker) {
+        let Some(old) = self.indicators.get(index) else { return };
+        let Some(updated) = IndicatorSpec::new(&old.code, params) else { return };
+        if *old == updated {
+            return;
+        }
+        if self.indicators.iter().enumerate().any(|(i, s)| i != index && *s == updated) {
+            self.indicators.remove(index);
+        } else {
+            self.indicators[index] = updated;
+        }
+        self.request_indicators(w);
+    }
+
+    /// Applied automatically only to *new* Korean charts. Previously saved
+    /// layouts keep their own indicators until the user requests this preset.
+    fn korean_study_preset() -> Vec<IndicatorSpec> {
+        [5.0, 10.0, 20.0, 60.0, 120.0]
+            .into_iter()
+            .filter_map(|n| IndicatorSpec::new("SMA", &[n]))
+            .chain(
+                [[5.0, 3.0, 3.0], [10.0, 6.0, 6.0], [20.0, 12.0, 12.0]]
+                    .into_iter()
+                    .filter_map(|params| IndicatorSpec::new("STOCHD", &params)),
+            )
+            .collect()
+    }
+
+    fn apply_korean_study_preset(&mut self, w: &Worker) {
+        self.indicators.retain(|s| s.code != "SMA" && s.code != "STOCHD");
+        self.indicators.extend(Self::korean_study_preset());
         self.request_indicators(w);
     }
 
@@ -493,7 +568,10 @@ impl ChartState {
     }
 
     pub fn on_indicators(&mut self, generation: u64, built: Vec<BuiltIndicator>) {
-        if generation == self.generation {
+        if generation == self.generation
+            && built.len() == self.indicators.len()
+            && built.iter().zip(&self.indicators).all(|(b, spec)| b.spec == *spec)
+        {
             self.built = built;
         }
     }
@@ -730,8 +808,8 @@ impl ChartState {
         };
 
         // Split plot height between the price pane and oscillator sub-panes.
-        let pane_specs: Vec<usize> = (0..self.built.len()).filter(|&i| self.built[i].spec.is_pane()).collect();
-        let n_sub = pane_specs.len().min(MAX_SUB_PANES);
+        let pane_groups = oscillator_groups(&self.built);
+        let n_sub = pane_groups.len().min(MAX_SUB_PANES);
         // Sub-panes share at most 60% of the plot so prices stay readable.
         let sub_h = if n_sub > 0 {
             (plot_all.height() * 0.2).clamp(50.0, 160.0).min(plot_all.height() * 0.6 / n_sub as f32)
@@ -908,12 +986,13 @@ impl ChartState {
 
         // Sub panes.
         let mut sub_rects = Vec::new();
-        for (k, &bi) in pane_specs.iter().take(n_sub).enumerate() {
-            let b = &self.built[bi];
+        for (k, members) in pane_groups.iter().take(n_sub).enumerate() {
+            let b = &self.built[members[0]];
             let top = price_rect.bottom() + sub_h * k as f32;
             let r = Rect::from_min_max(pos2(plot_all.left(), top), pos2(plot_all.right(), top + sub_h));
             let def = b.spec.def();
-            let ovs: Vec<Overlay> = b.overlays.iter().map(|o| o.1.clone()).collect();
+            let ovs: Vec<Overlay> =
+                members.iter().flat_map(|&i| self.built[i].overlays.iter().map(|o| o.1.clone())).collect();
             let mut s = style;
             s.thickness_px = 1.3;
             let so = scene::sub_pane(&ovs, &v, r.height() as f64, def.and_then(|d| d.range), s);
@@ -927,7 +1006,7 @@ impl ChartState {
             }
             let frame = Frame { pane: self.id * 8 + 1 + k as u64, frame_no, cmds: so.cmds };
             ui.painter().add(tr_chart::egui_wgpu::Callback::new_paint_callback(r, ChartCallback(Arc::new(frame))));
-            sub_rects.push((r, bi, so.scale));
+            sub_rects.push((r, members.clone(), so.scale));
         }
 
         // ---- axes ----
@@ -950,8 +1029,9 @@ impl ChartState {
                 );
             }
         }
-        for (r, bi, s) in &sub_rects {
-            let label = self.built[*bi].spec.label();
+        for (r, members, s) in &sub_rects {
+            let b = &self.built[members[0]];
+            let label = if b.spec.code == "STOCHD" { format!("Slow %D ×{}", members.len()) } else { b.spec.label() };
             ui.painter_at(*r).text(r.left_top() + vec2(6.0, 3.0), Align2::LEFT_TOP, label, mono(10.5), muted());
             for t in scale::price_ticks(s.lo, s.hi, 3) {
                 let y = r.top() + s.y_of(t) as f32;
@@ -1088,16 +1168,53 @@ impl ChartState {
             }
         });
         ui.menu_button("Indicators", |ui| {
-            ui.set_min_width(220.0);
+            ui.set_min_width(310.0);
             if ui.button("Search Indicators…").clicked() {
                 self.actions.push(Action::Command("IND".into()));
                 ui.close();
             }
+            if ui.button("Apply Korean preset · SMA 5/10/20/60/120 + Slow %D ×3").clicked() {
+                self.apply_korean_study_preset(w);
+                ui.close();
+            }
+            ui.menu_button("Multiple SMA lines…", |ui| self.sma_add_menu(ui, w));
+            ui.menu_button("Slow Stochastic %D lines…", |ui| self.stochd_add_menu(ui, w));
             if !self.indicators.is_empty() {
                 ui.separator();
-                ui.label(RichText::new("On this chart").small().color(muted()));
-                for spec in self.indicators.clone() {
-                    if ui.checkbox(&mut true, spec.label()).on_hover_text(spec.name()).clicked() {
+                ui.label(RichText::new("On this chart · change periods or remove a line").small().color(muted()));
+                for (index, spec) in self.indicators.clone().into_iter().enumerate() {
+                    if matches!(spec.code.as_str(), "SMA" | "STOCHD") {
+                        let mut params = spec.params.clone();
+                        let mut remove = false;
+                        let mut changed = false;
+                        ui.push_id((self.id, "edit-study", index), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(if spec.code == "SMA" { "SMA" } else { "Slow %D" }).on_hover_text(spec.name());
+                                for (idx, val) in params.iter_mut().enumerate() {
+                                    let mut n = *val as usize;
+                                    let limit = spec.def().and_then(|d| d.params.get(idx));
+                                    let max = limit.map_or(1000, |p| p.max as usize);
+                                    if ui
+                                        .add(egui::DragValue::new(&mut n).range(1..=max).speed(0.15))
+                                        .on_hover_text(limit.map_or("Length", |p| p.name))
+                                        .changed()
+                                    {
+                                        *val = n as f64;
+                                        changed = true;
+                                    }
+                                }
+                                if ui.small_button("✕").on_hover_text("Remove only this line").clicked() {
+                                    remove = true;
+                                }
+                            });
+                        });
+                        if remove {
+                            self.indicators.remove(index);
+                            self.request_indicators(w);
+                        } else if changed {
+                            self.edit_indicator_instance(index, &params, w);
+                        }
+                    } else if ui.checkbox(&mut true, spec.label()).on_hover_text(spec.name()).clicked() {
                         self.toggle_indicator(spec, w);
                     }
                 }
@@ -1108,6 +1225,14 @@ impl ChartState {
                     ui.set_min_width(260.0);
                     egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
                         for def in registry::all().iter().filter(|d| d.category == cat) {
+                            if def.code == "SMA" {
+                                ui.menu_button("Simple Moving Average · add lines", |ui| self.sma_add_menu(ui, w));
+                                continue;
+                            }
+                            if def.code == "STOCHD" {
+                                ui.menu_button("Slow Stochastic %D · add lines", |ui| self.stochd_add_menu(ui, w));
+                                continue;
+                            }
                             let on = self.indicators.iter().any(|s| s.code == def.code);
                             let hover = IndicatorSpec::of(def).label();
                             if ui.checkbox(&mut on.clone(), def.name).on_hover_text(hover).clicked() {
@@ -1159,6 +1284,62 @@ impl ChartState {
         }
     }
 
+    fn sma_add_menu(&mut self, ui: &mut Ui, w: &Worker) {
+        ui.set_min_width(225.0);
+        ui.label(RichText::new("SMA · select additional lengths").color(muted()));
+        ui.horizontal_wrapped(|ui| {
+            for n in [5, 10, 20, 60, 120] {
+                let active = self.indicators.iter().any(|s| s.code == "SMA" && s.params == [n as f64]);
+                if ui.add_enabled(!active, egui::Button::new(format!("{n}"))).clicked()
+                    && let Some(spec) = IndicatorSpec::new("SMA", &[n as f64])
+                {
+                    self.add_indicator_instance(spec, w);
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Custom");
+            ui.add(egui::DragValue::new(&mut self.custom_sma_length).range(1..=1000).speed(0.15));
+            if ui.button("Add SMA").clicked()
+                && let Some(spec) = IndicatorSpec::new("SMA", &[self.custom_sma_length as f64])
+            {
+                self.add_indicator_instance(spec, w);
+            }
+        });
+        ui.label(RichText::new("Periods count chart bars (1D = trading days)").small().color(muted()));
+    }
+
+    fn stochd_add_menu(&mut self, ui: &mut Ui, w: &Worker) {
+        ui.set_min_width(235.0);
+        ui.label(RichText::new("Slow Stochastic %D · one shared pane").color(muted()));
+        for periods in [[5, 3, 3], [10, 6, 6], [20, 12, 12]] {
+            let params = periods.map(f64::from);
+            let active = self.indicators.iter().any(|s| s.code == "STOCHD" && s.params == params);
+            if ui
+                .add_enabled(
+                    !active,
+                    egui::Button::new(format!("Slow %D ({}, {}, {})", periods[0], periods[1], periods[2])),
+                )
+                .clicked()
+                && let Some(spec) = IndicatorSpec::new("STOCHD", &params)
+            {
+                self.add_indicator_instance(spec, w);
+            }
+        }
+        ui.separator();
+        ui.label("Custom: %K length / slow %K / %D");
+        ui.horizontal(|ui| {
+            for n in &mut self.custom_slow_stoch {
+                ui.add(egui::DragValue::new(n).range(1..=1000).speed(0.15));
+            }
+            if ui.button("Add %D").clicked()
+                && let Some(spec) = IndicatorSpec::new("STOCHD", &self.custom_slow_stoch.map(|n| n as f64))
+            {
+                self.add_indicator_instance(spec, w);
+            }
+        });
+    }
+
     /// The range row's link between a security and its HIP-3 perp, drawn when it fits in
     /// `room`. Clicking it (or ⇧P) loads the other one here.
     fn switch_chip(&mut self, ui: &Ui, painter: &egui::Painter, left: Pos2, room: f32, target: &str) -> bool {
@@ -1194,7 +1375,7 @@ impl ChartState {
         ui: &Ui,
         price_rect: Rect,
         i: usize,
-        sub_rects: &[(Rect, usize, PriceScale)],
+        sub_rects: &[(Rect, Vec<usize>, PriceScale)],
         display_name: &str,
     ) {
         let Some(b) = self.bars.get(i) else { return };
@@ -1240,7 +1421,7 @@ impl ChartState {
             );
             ly += 14.0;
         }
-        let hidden = self.built.iter().filter(|b| b.spec.is_pane()).count().saturating_sub(sub_rects.len());
+        let hidden = oscillator_groups(&self.built).len().saturating_sub(sub_rects.len());
         if hidden > 0 {
             let note =
                 format!("+{hidden} more oscillator{} (max {MAX_SUB_PANES} panes)", if hidden == 1 { "" } else { "s" });
@@ -1272,18 +1453,43 @@ impl ChartState {
                 amber(),
             );
         }
-        for (r, bi, _) in sub_rects {
-            let b = &self.built[*bi];
+        for (r, members, _) in sub_rects {
+            let b = &self.built[members[0]];
             let painter = ui.painter_at(*r);
             // Values start after the pane's label (drawn with the axes).
-            let mut x = r.left() + 18.0 + painter.layout_no_wrap(b.spec.label(), mono(10.5), muted()).size().x;
-            for (name, o) in &b.overlays {
-                let Some(v) = value_at(&o.line) else { continue };
-                let color = if o.kind == LineKind::Hist { text() } else { opaque(o) };
-                let g = painter.layout_no_wrap(format!("{name} {}", scale::format_value(v)), mono(10.5), color);
-                let w = g.size().x;
-                painter.galley(pos2(x, r.top() + 3.0), g, color);
-                x += w + 10.0;
+            let title = if b.spec.code == "STOCHD" { format!("Slow %D ×{}", members.len()) } else { b.spec.label() };
+            let mut x = r.left() + 18.0 + painter.layout_no_wrap(title, mono(10.5), muted()).size().x;
+            let mut label_y = r.top() + 3.0;
+            for &member in members {
+                let study = &self.built[member];
+                for (name, o) in &study.overlays {
+                    let Some(v) = value_at(&o.line) else { continue };
+                    let color = if o.kind == LineKind::Hist { text() } else { opaque(o) };
+                    let label = if study.spec.code == "STOCHD" {
+                        format!(
+                            "({},{},{}) {}",
+                            study.spec.params[0] as usize,
+                            study.spec.params[1] as usize,
+                            study.spec.params[2] as usize,
+                            scale::format_value(v)
+                        )
+                    } else {
+                        format!("{name} {}", scale::format_value(v))
+                    };
+                    let g = painter.layout_no_wrap(label, mono(10.5), color);
+                    if x + g.size().x > r.right() - 8.0 {
+                        // A narrow sub-pane still needs to identify every
+                        // stochastic period/color. Wrap onto another row.
+                        label_y += 12.0;
+                        x = r.left() + 6.0;
+                        if label_y + g.size().y >= r.bottom() - 4.0 {
+                            break;
+                        }
+                    }
+                    let width = g.size().x;
+                    painter.galley(pos2(x, label_y), g, color);
+                    x += width + 10.0;
+                }
             }
         }
     }
@@ -1560,6 +1766,40 @@ fn end_of_history(was: bool, exhausted: bool, prepended: usize, full: bool) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_default_has_five_smas_and_three_slow_d_in_one_oscillator_pane() {
+        for symbol in ["KOSPI", "KOSDAQ", "005930.KS", "000660.KS"] {
+            let chart = ChartState::new(17, symbol, Timeframe::D1);
+            assert_eq!(chart.indicators.len(), 8, "{symbol}");
+            assert_eq!(
+                chart.indicators.iter().filter(|s| s.code == "SMA").map(|s| s.params[0] as usize).collect::<Vec<_>>(),
+                [5, 10, 20, 60, 120],
+            );
+            let slow: Vec<_> = chart.indicators.iter().filter(|s| s.code == "STOCHD").collect();
+            assert_eq!(
+                slow.iter().map(|s| s.params.clone()).collect::<Vec<_>>(),
+                [vec![5.0, 3.0, 3.0], vec![10.0, 6.0, 6.0], vec![20.0, 12.0, 12.0]]
+            );
+            let bars = tr_core::sample::generate("005930.KS", Timeframe::D1, 250, 1_790_000_000);
+            let built = crate::worker::build_indicators(&bars, Timeframe::D1, &chart.indicators, &theme::palette());
+            let groups = oscillator_groups(&built);
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0], vec![5, 6, 7]);
+            let rgba: Vec<_> = groups[0].iter().map(|&i| built[i].overlays[0].1.color).collect();
+            assert!(rgba[0] != rgba[1] && rgba[1] != rgba[2] && rgba[0] != rgba[2], "three differently coloured lines");
+            for i in &groups[0] {
+                assert_eq!(built[*i].overlays.len(), 1, "only %D");
+            }
+        }
+        let foreign = ChartState::new(17, "AAPL", Timeframe::D1);
+        assert_eq!(foreign.indicators, crate::command::default_indicators());
+        // Existing charts serialized as a list of study labels remain
+        // unchanged when restored rather than receiving the new preset.
+        let old: Vec<IndicatorSpec> = serde_json::from_str(r#"["SMA 20","SMA 50"]"#).unwrap();
+        assert_eq!(old.len(), 2);
+        assert_eq!(old[1].params, [50.0]);
+    }
 
     #[test]
     fn korean_charts_are_red_up_blue_down_without_affecting_foreign_markets() {
