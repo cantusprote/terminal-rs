@@ -7,7 +7,7 @@
     "type": "stdio",
     "command": "/usr/bin/env",
     "args": ["node", "./server.mjs"],
-    "env": { "TR_APPLE_STOCKS_CACHE": "1" }
+    "env": { "TR_APPLE_STOCKS_CACHE": "1", "TR_APPLE_STOCKS_LAUNCH": "0" }
   },
   "limits": { "max_response_bytes": 200000, "call_timeout_seconds": 55 },
   "tools": [

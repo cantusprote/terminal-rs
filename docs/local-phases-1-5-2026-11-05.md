@@ -18,8 +18,12 @@
 
 ## Phase 2 — 시세 데이터 정합성 및 Apple Stocks
 
-- Apple Stocks `stocks://?symbol=` 검색을 통해 시세 캐시가 없는 종목을
-  불러오는 기존 기능 보완.
+- 기존 구현에는 Apple Stocks `stocks://?symbol=` 검색으로 누락 시세를
+  불러오는 기능이 있었으나, 2026-11-05 실사용 점검에서 Stocks 앱이
+  `⌘Q` 종료 후에도 다시 열리는 문제가 확인되어 **자동 실행 기본
+  비활성화**. 현재는 로컬 캐시를 읽고 없으면 Yahoo로 대체한다.
+- `TR_APPLE_STOCKS_LAUNCH=1`은 사용자가 특별히 허용했을 때만
+  deep link로 Stocks 앱을 실행한다. Finder 앱과 MCP에는 기본 비활성화.
 - 한 요청에서 최대 3종목 순차 조회 (중복/빈번한 탐색 방지); 동시에 여러
   작업자가 Stocks를 탐색하지 않도록 교차 요청 탐색을 직렬화.
 - Apple SQLite 캐시의 `updatedAt`뿐 아니라 실제 시세 관측 시각인

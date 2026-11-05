@@ -66,10 +66,9 @@ impl MarketData for Markets {
 
     async fn history(&self, symbol: &str, tf: Timeframe, end: Option<i64>, limit: usize) -> Result<Vec<Bar>> {
         let sec = security(symbol);
-        // Chart history is commonly the first request when a user types a
-        // new ticker. Open it in Apple's Stocks app even when the selected
-        // timeframe requires full historical data from Yahoo/Alpaca. That
-        // primes its local quote cache for the subsequent quote requests.
+        // A chart may prime Apple's cache only when the separate,
+        // explicitly authorized Stocks auto-launch setting is enabled.
+        // Cache-only mode never opens Stocks and uses Yahoo/Alpaca instead.
         #[cfg(target_os = "macos")]
         if end.is_none()
             && apple_supports(sec.class)

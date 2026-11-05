@@ -26,6 +26,10 @@ plist="$bundle/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :LSEnvironment dict' "$plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c 'Add :LSEnvironment:TR_APPLE_STOCKS_CACHE string 1' "$plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c 'Set :LSEnvironment:TR_APPLE_STOCKS_CACHE 1' "$plist"
+# Reading the local cache is useful, but launching Stocks to fill missing
+# symbols must not override the user's Cmd+Q dismissal of Stocks.
+/usr/libexec/PlistBuddy -c 'Add :LSEnvironment:TR_APPLE_STOCKS_LAUNCH string 0' "$plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c 'Set :LSEnvironment:TR_APPLE_STOCKS_LAUNCH 0' "$plist"
 plutil -lint "$plist"
 # Ad-hoc signing is sufficient for this personal local installation.
 codesign --force --deep --sign - "$bundle"
@@ -44,4 +48,4 @@ rm -rf target/release/Terminal-rs.app
 ditto "$destination" target/release/Terminal-rs.app
 echo "Installed: $destination"
 echo "CLI: $(pwd)/target/release/terminal-cli"
-echo "Apple Stocks cache enabled for Finder app launches; no public updates or trade execution."
+echo "Apple Stocks cache read-only; automatic launch disabled. No public updates or trade execution."

@@ -1,9 +1,10 @@
 //! Read-only bridge to the *local* macOS Stocks app's SQLite market-data cache.
 //!
 //! This is not a StocksKit API client: it never uses private service methods,
-//! sessions or credentials. New symbols can be opened through the registered
-//! `stocks://` URL, after which the ordinary local cache is polled. The cache
-//! format is private and may change in future macOS releases.
+//! sessions or credentials. The existing local cache is read without opening
+//! Apple's Stocks application. Opening new symbols via `stocks://` is a
+//! separate, explicit opt-in (TR_APPLE_STOCKS_LAUNCH=1), never the default.
+//! The cache format is private and may change in future macOS releases.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,6 +53,8 @@ enum RefreshPlan {
 #[derive(Debug, Clone)]
 pub struct AppleStocksCache {
     cache_dir: PathBuf,
+    /// Reading Stocks' cache must not silently launch the Stocks application.
+    launch_enabled: bool,
     refresh_gate: Arc<Mutex<RefreshGate>>,
     /// Stocks uses one selected-symbol view. Concurrent deep links would
     /// interrupt each other, so only one quote-loading batch may navigate.
@@ -100,7 +103,10 @@ impl AppleStocksCache {
         }
         let home = std::env::var_os("HOME")?;
         let dir = PathBuf::from(home).join("Library/Group Containers/group.com.apple.stocks/Library/Caches");
-        let cache = Self::new(dir);
+        let mut cache = Self::new(dir);
+        cache.launch_enabled = std::env::var("TR_APPLE_STOCKS_LAUNCH")
+            .ok()
+            .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
         if !cache.cache_dir.join("shared-database").is_file() {
             tracing::warn!("Apple Stocks cache unavailable; using standard market data");
             return None;
@@ -111,19 +117,27 @@ impl AppleStocksCache {
     pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
         Self {
             cache_dir: cache_dir.into(),
+            launch_enabled: false,
             refresh_gate: Arc::new(Mutex::new(RefreshGate::default())),
             navigation: Arc::new(Mutex::new(())),
         }
     }
 
-    /// Opens Apple's own symbol view via its registered deep link and then
-    /// waits briefly for StocksKit to fill the ordinary local quote cache.
+    /// Only when TR_APPLE_STOCKS_LAUNCH=1 was explicitly set, opens Apple's
+    /// own symbol view and waits for StocksKit's ordinary local quote cache.
+    /// Otherwise the caller immediately falls back to Yahoo without opening
+    /// or relaunching Stocks, even when the cache is stale.
     /// This does not call any private API or access any session token.
     ///
     /// At most three missing symbols are opened per batch; an in-flight
     /// request for the same symbol is coalesced and attempts are rate-limited.
     /// Missing results are returned to the caller to route to Yahoo.
     pub async fn refresh_missing_quotes(&self, pairs: &[(String, String)]) -> Vec<Quote> {
+        // App users frequently quit Stocks with Cmd+Q. A cache *read* opt-in
+        // must never override that decision by repeatedly relaunching Stocks.
+        if !self.launch_enabled {
+            return Vec::new();
+        }
         // Keep the normal provider fallback responsive while another history
         // or watchlist request navigates the Stocks application.
         let Ok(_navigation) = self.navigation.try_lock() else {
@@ -410,11 +424,25 @@ mod tests {
     #[tokio::test]
     async fn simultaneous_refreshes_do_not_navigate_stocks_again() {
         let cache = AppleStocksCache::new("/nonexistent-apple-stocks-cache");
+        assert!(!cache.launch_enabled);
         let locked = cache.navigation.lock().await;
         let result = cache.refresh_missing_quotes(&[("AAPL US Equity".into(), "AAPL".into())]).await;
         assert!(result.is_empty(), "a busy Stocks symbol view must not receive a second deep link");
         drop(locked);
         assert!(cache.navigation.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn cache_read_mode_does_not_open_stocks_for_missing_symbols() {
+        let cache = AppleStocksCache::new("/nonexistent-apple-stocks-cache");
+        assert!(!cache.launch_enabled);
+        // In particular there must not be a 4-second open/poll wait or an
+        // attempt to launch a GUI for either a quote or a chart request.
+        let start = Instant::now();
+        let quotes = cache.refresh_missing_quotes(&[("AAPL US Equity".into(), "AAPL".into())]).await;
+        assert!(quotes.is_empty());
+        assert!(start.elapsed() < Duration::from_millis(300));
+        assert!(cache.refresh_gate.lock().await.attempted.is_empty());
     }
 
     #[test]

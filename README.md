@@ -196,8 +196,14 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
 cargo run --release                  # Yahoo data, congress ingest in the background
 TR_PROVIDER=sample cargo run --release   # offline
 APCA_API_KEY_ID=… APCA_API_SECRET_KEY=… cargo run --release   # Alpaca
-TR_APPLE_STOCKS_CACHE=1 cargo run --release   # macOS: open missing tickers in Stocks, read fresh cache, then Yahoo fallback
+TR_APPLE_STOCKS_CACHE=1 cargo run --release   # macOS: read cached Stocks prices without opening Stocks; Yahoo fallback
 ```
+
+Apple Stocks cache reading does **not** launch the Stocks application. This
+prevents Terminal-rs from reopening Stocks after you quit it with Cmd+Q. If
+you intentionally want automatic deep-link cache priming for a session, set
+`TR_APPLE_STOCKS_CACHE=1 TR_APPLE_STOCKS_LAUNCH=1` explicitly when starting
+the binary; it is disabled in the personal Finder installation and MCP add-on.
 
 **Personal use:** the independent `cantusprote/terminal-rs` project is
 maintained for local MacBook/Mac Studio use, **not for public distribution**.
