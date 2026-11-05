@@ -542,6 +542,16 @@ impl ChartState {
         b[i as usize].ts
     }
 
+    /// The chart keeps absolute Unix bar times. Only Korean-market labels
+    /// use KST; foreign-market labels retain their existing formatting.
+    fn axis_utc_offset_secs(&self) -> i32 {
+        #[cfg(not(target_arch = "wasm32"))]
+        if tr_data::kiwoom::is_domestic(&self.sec) {
+            return 9 * 3600;
+        }
+        0
+    }
+
     // ---- rendering --------------------------------------------------------------------
 
     /// Draw the pane into `rect`. Returns true if the pane was clicked (focus request).
@@ -931,16 +941,28 @@ impl ChartState {
         let (lo, hi) = v.visible_range(len);
         let time_painter = ui.painter_at(time_rect);
         time_painter.hline(time_rect.x_range(), time_rect.top(), Stroke::new(1.0, theme::border()));
+        let axis_offset = self.axis_utc_offset_secs();
         if hi > lo {
             let stride = ((hi - lo) / 600).max(1);
             let idxs: Vec<usize> = (lo..hi).step_by(stride).collect();
             let times: Vec<i64> = idxs.iter().map(|&i| self.bars[i].ts).collect();
             let gap = 90.0 / (v.bar_px * stride as f64);
-            for (j, label) in scale::time_ticks(&times, 0, times.len(), gap, self.tf) {
+            for (j, label) in scale::time_ticks_with_offset(&times, 0, times.len(), gap, self.tf, axis_offset) {
                 let x = price_rect.left() + v.x_center(idxs[j]) as f32;
                 ui.painter_at(plot_all).vline(x, plot_all.y_range(), Stroke::new(1.0, theme::grid()));
                 time_painter.text(pos2(x, time_rect.center().y), Align2::CENTER_CENTER, label, mono(10.5), muted());
             }
+        }
+        if axis_offset == 9 * 3600 && self.tf.is_intraday() {
+            // Clarify that the Korean intraday ticks are exchange-local,
+            // without taking any extra width from the existing chart plot.
+            axis_painter.text(
+                pos2(body.right() - 5.0, time_rect.center().y),
+                Align2::RIGHT_CENTER,
+                "KST",
+                mono(10.5),
+                muted(),
+            );
         }
 
         // Last price line + axis tag, fading in as the sweep reaches the last bar.
@@ -1002,7 +1024,10 @@ impl ChartState {
                 );
             }
             if let Some(i) = hovered_bar {
-                let label = scale::crosshair_label(self.bars[i].ts, self.tf);
+                let mut label = scale::crosshair_label_with_offset(self.bars[i].ts, self.tf, axis_offset);
+                if axis_offset == 9 * 3600 && self.tf.is_intraday() {
+                    label.push_str(" KST");
+                }
                 let gw = label.len() as f32 * 7.0 + 10.0;
                 let tag = Rect::from_center_size(pos2(xi, time_rect.center().y), vec2(gw, TIME_H));
                 time_painter.rect_filled(tag, 0.0, Color32::from_gray(70));

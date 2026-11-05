@@ -89,7 +89,14 @@ fn dt(ts: i64) -> DateTime<Utc> {
 }
 
 pub fn boundary(prev: i64, cur: i64) -> Boundary {
-    let (a, b) = (dt(prev), dt(cur));
+    boundary_with_offset(prev, cur, 0)
+}
+
+fn boundary_with_offset(prev: i64, cur: i64, utc_offset_secs: i32) -> Boundary {
+    // The bars retain their absolute Unix timestamps. Shift only calendar
+    // comparisons and labels to the exchange's display timezone.
+    let offset = i64::from(utc_offset_secs);
+    let (a, b) = (dt(prev.saturating_add(offset)), dt(cur.saturating_add(offset)));
     if a.year() != b.year() {
         Boundary::Year
     } else if a.month() != b.month() {
@@ -106,7 +113,11 @@ pub fn boundary(prev: i64, cur: i64) -> Boundary {
 }
 
 pub fn label(ts: i64, b: Boundary, tf: Timeframe) -> String {
-    let d = dt(ts);
+    label_with_offset(ts, b, tf, 0)
+}
+
+fn label_with_offset(ts: i64, b: Boundary, tf: Timeframe, utc_offset_secs: i32) -> String {
+    let d = dt(ts.saturating_add(i64::from(utc_offset_secs)));
     match b {
         Boundary::Year => d.format("%Y").to_string(),
         Boundary::Month => d.format("%b").to_string(),
@@ -118,20 +129,41 @@ pub fn label(ts: i64, b: Boundary, tf: Timeframe) -> String {
 
 /// Full timestamp for crosshair labels.
 pub fn crosshair_label(ts: i64, tf: Timeframe) -> String {
-    let d = dt(ts);
+    crosshair_label_with_offset(ts, tf, 0)
+}
+
+/// Calendar/time displayed under the cursor for an exchange's fixed UTC
+/// offset. Korean markets use +09:00; zero preserves the original behavior.
+pub fn crosshair_label_with_offset(ts: i64, tf: Timeframe, utc_offset_secs: i32) -> String {
+    let d = dt(ts.saturating_add(i64::from(utc_offset_secs)));
     if tf.is_intraday() { d.format("%a %d %b '%y %H:%M").to_string() } else { d.format("%a %d %b '%y").to_string() }
 }
 
 /// Choose labelled bars among `times[lo..hi]`, preferring higher boundaries, with at least
 /// `min_gap_bars` between labels. Returns `(index, label)` pairs in ascending order.
 pub fn time_ticks(times: &[i64], lo: usize, hi: usize, min_gap_bars: f64, tf: Timeframe) -> Vec<(usize, String)> {
+    time_ticks_with_offset(times, lo, hi, min_gap_bars, tf, 0)
+}
+
+/// Time-axis labels in the exchange's display timezone, without changing
+/// bar timestamps, chart coordinates, indicators or stored series data.
+pub fn time_ticks_with_offset(
+    times: &[i64],
+    lo: usize,
+    hi: usize,
+    min_gap_bars: f64,
+    tf: Timeframe,
+    utc_offset_secs: i32,
+) -> Vec<(usize, String)> {
     let hi = hi.min(times.len());
     if lo >= hi {
         return Vec::new();
     }
     let gap = min_gap_bars.max(1.0).ceil() as usize;
-    let mut cands: Vec<(Boundary, usize)> =
-        (lo.max(1)..hi).map(|i| (boundary(times[i - 1], times[i]), i)).filter(|(b, _)| *b > Boundary::None).collect();
+    let mut cands: Vec<(Boundary, usize)> = (lo.max(1)..hi)
+        .map(|i| (boundary_with_offset(times[i - 1], times[i], utc_offset_secs), i))
+        .filter(|(b, _)| *b > Boundary::None)
+        .collect();
     // Higher boundaries first; within a level, keep chronological order.
     cands.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     let mut chosen: Vec<(usize, Boundary)> = Vec::new();
@@ -144,7 +176,7 @@ pub fn time_ticks(times: &[i64], lo: usize, hi: usize, min_gap_bars: f64, tf: Ti
         }
     }
     chosen.sort_by_key(|(i, _)| *i);
-    chosen.into_iter().map(|(i, b)| (i, label(times[i], b, tf))).collect()
+    chosen.into_iter().map(|(i, b)| (i, label_with_offset(times[i], b, tf, utc_offset_secs))).collect()
 }
 
 #[cfg(test)]
@@ -188,5 +220,31 @@ mod tests {
         let labels: Vec<&str> = ticks.iter().map(|(_, l)| l.as_str()).collect();
         assert!(labels.contains(&"Feb") && labels.contains(&"Mar"), "{labels:?}");
         assert!(ticks.windows(2).all(|w| w[1].0 - w[0].0 >= 20));
+    }
+
+    #[test]
+    fn korean_intraday_chart_axis_uses_kst_without_mutating_utc_bars() {
+        // 2026-11-05 09:00 KST = 2026-11-05 00:00 UTC.
+        let market_open = chrono::DateTime::parse_from_rfc3339("2026-11-05T00:00:00Z").unwrap().timestamp();
+        let last = market_open + 6 * 3600 + 30 * 60;
+        assert!(crosshair_label_with_offset(last, Timeframe::M1, 9 * 3600).ends_with("15:30"));
+        assert!(crosshair_label(last, Timeframe::M1).ends_with("06:30"));
+        // Include a preceding hour so the 09:00 boundary has two bars
+        // to compare; the tick selector intentionally skips the first bar.
+        let bars: Vec<i64> = (0..8).map(|i| market_open - 3600 + i * 3600).collect();
+        let labels = time_ticks_with_offset(&bars, 0, bars.len(), 1.0, Timeframe::M1, 9 * 3600);
+        assert!(labels.iter().any(|(_, l)| l == "09:00"), "{labels:?}");
+        assert!(labels.iter().any(|(_, l)| l == "15:00"), "{labels:?}");
+        assert_eq!(bars[1], market_open);
+    }
+
+    #[test]
+    fn overseas_chart_axis_keeps_existing_utc_labels() {
+        let t = chrono::DateTime::parse_from_rfc3339("2026-11-05T14:00:00Z").unwrap().timestamp();
+        assert_eq!(crosshair_label(t, Timeframe::M1), crosshair_label_with_offset(t, Timeframe::M1, 0));
+        assert_eq!(
+            time_ticks(&[t, t + 3600], 0, 2, 1.0, Timeframe::M1),
+            time_ticks_with_offset(&[t, t + 3600], 0, 2, 1.0, Timeframe::M1, 0)
+        );
     }
 }

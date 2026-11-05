@@ -138,6 +138,13 @@ Real-data validation (2026-11-05, existing authenticated CLI):
   Hovering a quote still shows its complete provider/timestamp provenance.
   The daily-candle time axis remains at 09:00 (bar opening), separate
   from the actual exchange quote observation.
+- Korean-market **intraday chart X-axis ticks and crosshair timestamps**
+  now use exchange-local **KST (UTC+09:00)** instead of the former raw UTC
+  formatter. The plot's right-hand time-axis area shows `KST`, and the
+  crosshair timestamp includes the timezone suffix. Actual bar Unix times
+  and candle OHLCV data are unchanged. This corrects the nine-hour chart
+  display offset (e.g., 15:30 KST was previously drawn as 06:30).
+  Overseas charts continue using their existing timestamp format.
 - Active sSb MCP Loader: `terminal_quote` routed KOSPI/KOSDAQ/005930
   through Kiwoom, whereas AAPL remained on the existing Apple Stocks/Yahoo
   foreign-provider path; `terminal_history`, `terminal_book`, and
