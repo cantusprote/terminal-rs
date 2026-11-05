@@ -23,6 +23,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod alpaca;
+#[cfg(target_os = "macos")]
+pub mod apple_stocks;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cache;
 pub mod crypto;
@@ -468,9 +470,19 @@ pub fn from_env() -> Provider {
         _ => None,
     };
     let markets = match markets::Markets::new(alpaca) {
-        Ok(m) => Fallback::new(m),
+        Ok(m) => m,
         Err(_) => return Arc::new(sample::SampleProvider::default().with_live_ticks()),
     };
+    // When Apple Stocks is explicitly enabled, the caller requested the real
+    // Apple → Yahoo/Alpaca chain. Do not insert fabricated sample prices after
+    // both sources fail; the opt-in offline sample provider remains available.
+    if markets.name().starts_with("apple-stocks-cache+") {
+        return match var("TR_SERVER_URL") {
+            Some(url) => Arc::new(remote::RemoteMarkets::new(url.trim(), markets)),
+            None => Arc::new(markets),
+        };
+    }
+    let markets = Fallback::new(markets);
     match var("TR_SERVER_URL") {
         Some(url) => {
             // The URL itself stays out of the logs.

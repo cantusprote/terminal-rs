@@ -267,10 +267,16 @@ impl fmt::Display for Security {
 
 pub fn looks_like_ticker(s: &str) -> bool {
     let core = s.trim_start_matches('^');
+    // Exchange-qualified South Korean equity tickers are numeric (e.g.
+    // Samsung Electronics 005930.KS). Bare numbers remain reserved for
+    // interval and command input in the terminal.
+    let korean_equity = [".KS", ".KQ"].iter().any(|suffix| {
+        core.strip_suffix(suffix).is_some_and(|code| code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()))
+    });
     !core.is_empty()
         && core.len() <= 14
         && core.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '='))
-        && core.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && (core.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) || korean_equity)
 }
 
 #[cfg(test)]
@@ -292,6 +298,9 @@ mod tests {
         assert_eq!(r("aapl us equity"), Security::new("AAPL", AssetClass::Equity));
         assert_eq!(r("CL1 Comdty").key(), "CL1 Comdty");
         assert_eq!(r("SPY").class, AssetClass::Etf);
+        assert_eq!(r("005930.KS"), Security::new("005930.KS", AssetClass::Equity));
+        assert_eq!(r("035900.KQ"), Security::new("035900.KQ", AssetClass::Equity));
+        assert!(!looks_like_ticker("5"), "bare numbers are chart interval commands");
     }
 
     #[test]

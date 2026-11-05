@@ -404,7 +404,15 @@ pub fn yahoo_symbol(sec: &Security) -> String {
         return y.to_string();
     }
     match sec.class {
-        AssetClass::Equity | AssetClass::Etf => sec.ticker.replace('.', "-"),
+        AssetClass::Equity | AssetClass::Etf => {
+            // Dot means a Korean exchange suffix in 005930.KS / 035720.KQ,
+            // but a share class in BRK.B (Yahoo expects BRK-B).
+            if sec.ticker.ends_with(".KS") || sec.ticker.ends_with(".KQ") {
+                sec.ticker.clone()
+            } else {
+                sec.ticker.replace('.', "-")
+            }
+        }
         AssetClass::Index if sec.ticker.starts_with('^') => sec.ticker.clone(),
         AssetClass::Index => format!("^{}", sec.ticker),
         AssetClass::Fx => format!("{}=X", sec.ticker),
@@ -507,6 +515,8 @@ mod tests {
         assert_eq!(s("CL1", AssetClass::Cmdty), "CL=F");
         assert_eq!(s("AUDNZD", AssetClass::Fx), "AUDNZD=X");
         assert_eq!(s("BRK.B", AssetClass::Equity), "BRK-B");
+        assert_eq!(s("005930.KS", AssetClass::Equity), "005930.KS");
+        assert_eq!(s("035900.KQ", AssetClass::Equity), "035900.KQ");
         assert_eq!(s("ZZZ", AssetClass::Equity), "ZZZ");
         assert_eq!(security_for_yahoo("EURUSD=X", "CURRENCY").unwrap().key(), "EURUSD Curncy");
         assert_eq!(security_for_yahoo("GC=F", "FUTURE").unwrap().key(), "GC1 Comdty");

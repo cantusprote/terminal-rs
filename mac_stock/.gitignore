@@ -1,0 +1,25 @@
+# Keep private market caches, Apple executables, analysis snapshots and captures
+# out of source control. Only source code and redacted notes are tracked.
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.sqlite-*
+shared-database*
+sparkline-database*
+cache-database*
+*auth-token*
+*.jsonl
+*.har
+*.pcap
+*.pcapng
+*.ghidra
+*.hopper
+*.bin
+*.dylib
+*.app/
+*.xpc/
+01_Binary/
+07_Bridge/
+captures/
+snapshots/

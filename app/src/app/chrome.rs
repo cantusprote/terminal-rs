@@ -992,6 +992,8 @@ fn source_chip(provider: &str) -> (&'static str, bool) {
     let n = provider.to_lowercase();
     if n == "sample" {
         ("Offline", false)
+    } else if n.contains("apple-stocks-cache") {
+        ("Stocks cached", true)
     } else if n.contains("sample") && n.starts_with("server+") {
         ("Crypto + perps live", true)
     } else if n.contains("sample") {
@@ -1005,6 +1007,10 @@ fn provider_label(provider: &str) -> String {
     let n = provider.to_lowercase();
     if n == "sample" {
         "Offline · sample data".into()
+    } else if n.contains("apple-stocks-cache") {
+        format!(
+            "Apple Stocks read-only local cache (quotes may be delayed and only update when Stocks fetches data); missing/stale records use {provider}"
+        )
     } else if let Some(rest) = provider.strip_prefix("server+") {
         // A Terminal server (tr_data::remote::RemoteMarkets), in front of the browser's sources
         // (tr_data::web::WebMarkets) or the desktop's.
@@ -1040,12 +1046,15 @@ mod tests {
         let desktop = provider_label("server+markets");
         assert!(desktop.contains("Terminal server") && desktop.ends_with("other markets from markets"), "{desktop}");
         assert!(web.contains("HIP-3 perps") && desktop.contains("HIP-3 perps"), "{web} / {desktop}");
+        let apple = provider_label("apple-stocks-cache+yahoo+binance+ust");
+        assert!(apple.contains("may be delayed") && apple.contains("read-only"));
     }
 
     /// With a server in front, the browser build has live perps as well as crypto.
     #[test]
     fn the_source_chip_says_what_is_live() {
         assert_eq!(source_chip("sample"), ("Offline", false));
+        assert_eq!(source_chip("apple-stocks-cache+yahoo+binance+ust"), ("Stocks cached", true));
         assert_eq!(source_chip("binance+sample"), ("Crypto live", true));
         assert_eq!(source_chip("server+binance+sample"), ("Crypto + perps live", true));
         assert_eq!(source_chip("server+yahoo+binance+ust"), ("Live", true));

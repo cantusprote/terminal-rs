@@ -184,6 +184,7 @@ gets the native title bar with traffic lights, window vibrancy behind the sideba
 cargo run --release                  # Yahoo data, congress ingest in the background
 TR_PROVIDER=sample cargo run --release   # offline
 APCA_API_KEY_ID=… APCA_API_SECRET_KEY=… cargo run --release   # Alpaca
+TR_APPLE_STOCKS_CACHE=1 cargo run --release   # macOS: open missing tickers in Stocks, read fresh cache, then Yahoo fallback
 ```
 
 Data lives in `~/Library/Application Support/terminal` (macOS) or

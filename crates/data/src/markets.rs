@@ -15,6 +15,8 @@ use async_trait::async_trait;
 use tr_core::{AssetClass, Bar, Security, Timeframe, catalog};
 
 use crate::alpaca::AlpacaProvider;
+#[cfg(target_os = "macos")]
+use crate::apple_stocks::AppleStocksCache;
 use crate::crypto::CryptoProvider;
 use crate::treasury::TreasuryProvider;
 use crate::yahoo::{YahooProvider, yahoo_symbol};
@@ -27,17 +29,25 @@ pub struct Markets {
     crypto: CryptoProvider,
     treasury: TreasuryProvider,
     alpaca: Option<AlpacaProvider>,
+    #[cfg(target_os = "macos")]
+    apple: Option<AppleStocksCache>,
     name: String,
 }
 
 impl Markets {
     pub fn new(alpaca: Option<AlpacaProvider>) -> Result<Self> {
         let name = if alpaca.is_some() { "alpaca+yahoo+binance+ust" } else { "yahoo+binance+ust" }.to_string();
+        #[cfg(target_os = "macos")]
+        let apple = AppleStocksCache::from_env();
+        #[cfg(target_os = "macos")]
+        let name = if apple.is_some() { format!("apple-stocks-cache+{name}") } else { name };
         Ok(Self {
             yahoo: YahooProvider::new()?,
             crypto: CryptoProvider::new()?,
             treasury: TreasuryProvider::new()?,
             alpaca,
+            #[cfg(target_os = "macos")]
+            apple,
             name,
         })
     }
@@ -51,7 +61,22 @@ impl MarketData for Markets {
 
     async fn history(&self, symbol: &str, tf: Timeframe, end: Option<i64>, limit: usize) -> Result<Vec<Bar>> {
         let sec = security(symbol);
-        match sec.class {
+        // Chart history is commonly the first request when a user types a
+        // new ticker. Open it in Apple's Stocks app even when the selected
+        // timeframe requires full historical data from Yahoo/Alpaca. That
+        // primes its local quote cache for the subsequent quote requests.
+        #[cfg(target_os = "macos")]
+        if end.is_none()
+            && !matches!(sec.class, AssetClass::Crypto | AssetClass::Govt | AssetClass::Perp)
+            && let Some(cache) = &self.apple
+        {
+            let native = yahoo_symbol(&sec);
+            let lookup = [(symbol.to_owned(), native)];
+            if cache.quotes(&lookup).is_ok_and(|quotes| quotes.is_empty()) {
+                let _ = cache.refresh_missing_quotes(&lookup).await;
+            }
+        }
+        let primary = match sec.class {
             AssetClass::Perp => Err(perp_needs_server(symbol)),
             AssetClass::Crypto => self.crypto.history(&sec, tf, end, limit).await,
             AssetClass::Govt if tf.is_intraday() => match catalog::by_security(&sec).and_then(|l| l.yahoo) {
@@ -67,7 +92,44 @@ impl MarketData for Markets {
                 }
             }
             _ => self.yahoo.history(&yahoo_symbol(&sec), tf, end, limit).await,
+        };
+        // Apple Stocks only keeps a short recent sparkline, generally with 10m
+        // OHLCV. Merge its latest compatible 30m/1h/4h buckets with the normal
+        // full historical source; never use it for older-history paging.
+        #[cfg(target_os = "macos")]
+        if end.is_none()
+            && !matches!(sec.class, AssetClass::Crypto | AssetClass::Govt | AssetClass::Perp)
+            && let Some(cache) = &self.apple
+        {
+            match cache.history(&yahoo_symbol(&sec), tf) {
+                Ok(recent) if !recent.is_empty() => {
+                    let mut bars = match primary {
+                        Ok(bars) => bars,
+                        Err(e) => {
+                            tracing::warn!(
+                                "history {symbol}: network source unavailable ({e:#}); using short Apple Stocks cache"
+                            );
+                            Vec::new()
+                        }
+                    };
+                    let last = bars.last().map(|b| b.ts);
+                    // Use Apple only for the most recent bucket(s); do not
+                    // overwrite older, already complete bars from the feed.
+                    for bar in recent {
+                        if last.is_none_or(|ts| bar.ts >= ts) {
+                            match bars.binary_search_by_key(&bar.ts, |b| b.ts) {
+                                Ok(i) => bars[i] = bar,
+                                Err(i) => bars.insert(i, bar),
+                            }
+                        }
+                    }
+                    return Ok(crate::clip(bars, end, limit));
+                }
+                Err(e) => tracing::warn!("Apple Stocks sparkline unavailable for {symbol}: {e:#}"),
+                _ => {}
+            }
         }
+        primary
     }
 
     async fn quotes(&self, symbols: &[String]) -> Result<Vec<Quote>> {
@@ -81,18 +143,40 @@ impl MarketData for Markets {
                 _ => other.push((key.clone(), sec)),
             }
         }
+        // Read Apple's local cache first, with Yahoo only for symbols that are
+        // absent, stale, or malformed. No XPC calls or auth tokens are involved.
+        #[cfg(target_os = "macos")]
+        let mut apple_quotes: Vec<Quote> = Vec::new();
+        #[cfg(not(target_os = "macos"))]
+        let apple_quotes: Vec<Quote> = Vec::new();
+        #[cfg(target_os = "macos")]
+        if let Some(cache) = &self.apple {
+            let pairs: Vec<(String, String)> =
+                other.iter().map(|(key, sec)| (key.clone(), yahoo_symbol(sec))).collect();
+            match cache.quotes(&pairs) {
+                Ok(quotes) => apple_quotes = quotes,
+                Err(e) => tracing::warn!("Apple Stocks cache unavailable: {e:#}"),
+            }
+            let missing: Vec<(String, String)> =
+                pairs.into_iter().filter(|(key, _)| !apple_quotes.iter().any(|q| q.symbol == *key)).collect();
+            if !missing.is_empty() {
+                apple_quotes.extend(cache.refresh_missing_quotes(&missing).await);
+            }
+        }
+        let remaining: Vec<_> =
+            other.iter().filter(|(key, _)| !apple_quotes.iter().any(|q| q.symbol == *key)).collect();
         let (c, g, y) = tokio::join!(
             async { if crypto.is_empty() { Ok(vec![]) } else { self.crypto.quotes(&crypto).await } },
             async { if govt.is_empty() { Ok(vec![]) } else { self.treasury.quotes(&govt).await } },
             async {
-                if other.is_empty() {
+                if remaining.is_empty() {
                     return Ok(vec![]);
                 }
-                let ys: Vec<String> = other.iter().map(|(_, s)| yahoo_symbol(s)).collect();
+                let ys: Vec<String> = remaining.iter().map(|(_, s)| yahoo_symbol(s)).collect();
                 let quotes = self.yahoo.quotes(&ys).await?;
                 // Map Yahoo symbols back to the caller's market keys.
                 Ok::<_, anyhow::Error>(
-                    other
+                    remaining
                         .iter()
                         .zip(&ys)
                         .filter_map(|((key, _), y)| {
@@ -102,7 +186,7 @@ impl MarketData for Markets {
                 )
             }
         );
-        let mut out = Vec::new();
+        let mut out = apple_quotes;
         let mut errors = Vec::new();
         for r in [c, g, y] {
             match r {
