@@ -1,13 +1,10 @@
 name: deploy site
 
-# Builds the browser app with scripts/build-web.sh and deploys the site with it to Vercel:
-# production on every push to master, a preview for each pull request. Vercel's own Git
-# deployments are off (site/vercel.json) because Vercel's build doesn't run Rust.
+# Independent repository: explicit manual deployment only. No upstream-linked
+# auto-deployments or CI builds are triggered by a push or pull request.
+# Vercel's own Git deployments are off (site/vercel.json).
 
 on:
-  push:
-    branches: [master]
-  pull_request:
   workflow_dispatch:
 
 # Production runs queue instead of cancelling each other, so the newest commit always deploys

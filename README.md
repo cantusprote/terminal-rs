@@ -200,10 +200,15 @@ chart anti-aliasing (default 4 on macOS), `TR_VIBRANCY=0` disables the transluce
 ⌃⌘S (Ctrl+Shift+S elsewhere) toggles the sidebar. `scripts/bundle-macos.sh` builds a retina-capable
 `Terminal.app` (icon from `scripts/build-icon.sh`); `scripts/release-macos.sh` builds the universal (Apple Silicon + Intel) app,
 signs it with a Developer ID certificate, notarizes it and packages `Terminal.dmg`,
-plus the zip and signed `appcast.xml` that installed copies update from (one-time credential
-setup is at the top of the script). The app checks that feed once a day through
-[Sparkle](https://sparkle-project.org) and offers to install a newer release; Terminal › Check
-for Updates… or `UPDATE` checks at once. `scripts/check-macos-cross.sh` compiles
+plus the zip and signed `appcast.xml` for independent releases (one-time credential
+setup is at the top of the script). The private fork is maintained separately:
+**bundles do not include automatic updates by default**, so they cannot install
+updates signed by the original author's key. To enable automatic updates,
+create a new [Sparkle](https://sparkle-project.org) signing key and supply its
+public half as `TR_SPARKLE_PUBLIC_KEY` when bundling and releasing; the feed
+points only to `cantusprote/terminal-rs`. Until then, Terminal › Check for
+Updates… or `UPDATE` opens the independent repository's Releases page.
+`scripts/check-macos-cross.sh` compiles
 and lints the whole workspace for aarch64-apple-darwin from Linux (zig as the C cross-compiler;
 linking needs the macOS SDK).
 

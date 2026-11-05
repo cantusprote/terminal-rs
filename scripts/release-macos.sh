@@ -13,20 +13,24 @@
 #
 #   xcrun notarytool store-credentials terminal-rs-notary --apple-id you@example.com --team-id TEAMID
 #
-# Updates are signed with the EdDSA key in the login keychain under the account terminal-rs,
-# whose public half is in scripts/bundle-macos.sh. Keep an exported copy somewhere safe:
-# installed copies accept no other key, so losing it ends their updates.
+# Independent releases use a NEW Sparkle EdDSA key, never the upstream
+# author's key. Set TR_SPARKLE_PUBLIC_KEY to the public half and keep the
+# matching private half in the release Mac's login keychain.
 #
-#   target/sparkle/<version>/bin/generate_keys --account terminal-rs -x terminal-rs-sparkle.key
-#   target/sparkle/<version>/bin/generate_keys --account terminal-rs -f terminal-rs-sparkle.key  # on a new Mac
+#   scripts/fetch-sparkle.sh
+#   target/sparkle/<version>/bin/generate_keys --account cantusprote-terminal-rs
+#   export TR_SPARKLE_PUBLIC_KEY=$(target/sparkle/<version>/bin/generate_keys --account cantusprote-terminal-rs -p)
+#   target/sparkle/<version>/bin/generate_keys --account cantusprote-terminal-rs -x my-sparkle.key
+# Never commit the exported private key.
 #
-# The notary profile and the signing key's account keep the project's old name, terminal-rs,
-# because they name items that already exist in the release Mac's keychain.
+# The notary profile may retain the original local label, but the update-signing
+# keychain account is separate from the upstream project.
 #
 #   SIGN_IDENTITY    signing identity (default: the first "Developer ID Application" in the keychain)
 #   NOTARY_PROFILE   notarytool keychain profile (default: terminal-rs-notary)
 #   NOTARY_KEYCHAIN  keychain holding that profile (default: the login keychain)
-#   SPARKLE_ACCOUNT  login keychain account of the update signing key (default: terminal-rs)
+#   SPARKLE_ACCOUNT  login keychain account of our own key (default: cantusprote-terminal-rs)
+#   TR_SPARKLE_PUBLIC_KEY  public half of our own Ed25519 update-signing key
 #   NOTARIZE=0       sign and package without notarizing or writing the update feed
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -42,11 +46,15 @@ if [ "$notarize" = 1 ] && ! xcrun notarytool history "${notary[@]}" >/dev/null; 
 fi
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-repo=https://github.com/michaelshimeles/terminal
-sparkle=$(scripts/fetch-sparkle.sh)
-sparkle_account=${SPARKLE_ACCOUNT:-terminal-rs}
-sparkle_key=$(sed -n 's/^sparkle_key=//p' scripts/bundle-macos.sh)
+repo=https://github.com/cantusprote/terminal-rs
+sparkle_account=${SPARKLE_ACCOUNT:-cantusprote-terminal-rs}
+sparkle_key=${TR_SPARKLE_PUBLIC_KEY:-}
 if [ "$notarize" = 1 ]; then
+  if [ -z "$sparkle_key" ]; then
+    echo "Cannot publish a signed update feed without our own Sparkle key. Set TR_SPARKLE_PUBLIC_KEY (see this script header), or use NOTARIZE=0 for a local bundle." >&2
+    exit 1
+  fi
+  sparkle=$(scripts/fetch-sparkle.sh)
   key=$("$sparkle/bin/generate_keys" --account "$sparkle_account" -p 2>/dev/null || true)
   if [ "$key" != "$sparkle_key" ]; then
     echo "the login keychain's update signing key (account $sparkle_account) is '$key', but the app trusts $sparkle_key." >&2
@@ -95,9 +103,12 @@ framework=$app/Contents/Frameworks/Sparkle.framework
 echo "signing as $identity"
 # Inside out, Sparkle's helpers first. The hardened runtime loads Sparkle.framework only when it
 # is signed by the app's own team.
-for code in "$framework/Versions/B/Autoupdate" "$framework/Versions/B/Updater.app" "$framework" "$app"; do
-  codesign --force --options runtime --timestamp --sign "$identity" "$code"
-done
+if [ -d "$framework" ]; then
+  for code in "$framework/Versions/B/Autoupdate" "$framework/Versions/B/Updater.app" "$framework"; do
+    codesign --force --options runtime --timestamp --sign "$identity" "$code"
+  done
+fi
+codesign --force --options runtime --timestamp --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 if [ "$notarize" = 1 ]; then
   ditto -c -k --keepParent "$app" "$tmp/Terminal.zip"

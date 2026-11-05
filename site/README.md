@@ -37,7 +37,7 @@ npm run check
   plus the name, title and description used by the page's metadata. Update it with each release.
   `static/robots.txt` and `static/sitemap.xml` repeat the site URL.
 - `src/routes/download/+server.ts` answers `GET /download` with a 302 to
-  `https://github.com/michaelshimeles/terminal/releases/latest/download/Terminal.dmg`.
+  `https://github.com/cantusprote/terminal-rs/releases/latest/download/Terminal.dmg`.
   That URL works only once a GitHub release includes an asset named exactly `Terminal.dmg`.
 - The download buttons open `src/lib/DownloadDialog.svelte`, which asks for an email, sends it to
   `POST /download`, then starts the download with `GET /download`. The browser remembers that it
@@ -67,12 +67,13 @@ local stand-in); leave them unset in production.
 
 ## Deploys
 
-GitHub Actions deploys the site, not Vercel's Git integration, because the browser app at `/app`
-is built from Rust and Vercel's build doesn't run Rust. `.github/workflows/deploy-site.yml` runs
-`scripts/build-web.sh`, then `vercel build` and `vercel deploy --prebuilt` from the repository
-root. Pushes to `master` deploy to production. Pull requests from branches in this repository
-get a preview, linked from the pull request; pull requests from forks only build the app.
-`vercel.json` turns off Vercel's own Git deployments, so each commit deploys once.
+GitHub Actions can deploy the site, not Vercel's Git integration, because the browser app at `/app`
+is built from Rust and Vercel's build doesn't run Rust. The **independent repository**
+uses manual `workflow_dispatch` only: no pushes or pull requests automatically
+build or deploy. Start `deploy site` from GitHub Actions after configuring your
+own Vercel project and credentials. `.github/workflows/deploy-site.yml` runs
+`scripts/build-web.sh`, then `vercel build` and `vercel deploy --prebuilt`
+from the repository root. `vercel.json` also disables Vercel's Git deployments.
 
 The workflow reads three repository secrets:
 

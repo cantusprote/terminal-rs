@@ -4,7 +4,7 @@
 # Usage: vm-setup.sh [git-ref]   (a branch, tag or full commit; default: master)
 set -euo pipefail
 REF="${1:-master}"
-REPO="https://github.com/michaelshimeles/terminal.git"
+REPO="https://github.com/cantusprote/terminal-rs.git"
 SRC=/opt/terminal/src
 export DEBIAN_FRONTEND=noninteractive
 
