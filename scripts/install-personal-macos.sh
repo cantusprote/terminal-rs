@@ -4,7 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-install_dir="${TR_INSTALL_DIR:-/Applications}"
+# Personal apps live in the user's Applications folder. Override explicitly
+# with TR_INSTALL_DIR if another destination is required.
+install_dir="${TR_INSTALL_DIR:-$HOME/Applications}"
 destination="$install_dir/Terminal-rs.app"
 executable="$destination/Contents/MacOS/Terminal"
 if pgrep -f "^$executable$" >/dev/null 2>&1; then
@@ -46,7 +48,7 @@ fi
 # Keep an equally configured build artifact as a convenient copy for this Mac.
 project_app="$(pwd)/target/release/Terminal-rs.app"
 if pgrep -f "^$project_app/Contents/MacOS/Terminal$" >/dev/null 2>&1; then
-  echo "Preserving currently running $project_app; use /Applications/Terminal-rs.app after quitting."
+  echo "Preserving currently running $project_app; use $destination after quitting."
 else
   rm -rf target/release/Terminal-rs.app
   ditto "$destination" target/release/Terminal-rs.app
